@@ -1,0 +1,11 @@
+torch
+torchvision
+dearpygui
+dxcam
+opencv-python
+vgamepad
+wandb
+lightning
+einops
+hydra-core
+numpy
