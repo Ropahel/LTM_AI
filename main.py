@@ -4,14 +4,11 @@ Instancie la configuration globale, lance les processus asynchrones (interface u
 démarre l'orchestrateur.
 """
 
-
-
-
 """
 import torch.multiprocessing as mp
-from src.utils.config import load_config
+from src.utils.logger import load_config
 from src.orchestrator import Orchestrator
-from src.ui.dashboard import LTM_Dashboard
+from src.ui.dashboard import Dashboard
 
 def main():
     # 1. Éviter les problèmes de démarrage multi-processus sous Windows/Linux
@@ -59,4 +56,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 """
