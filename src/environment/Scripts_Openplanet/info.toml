@@ -1,0 +1,12 @@
+[meta]
+name = "LTM_Telemetry"
+author = "Raphael"
+category = "Testing"
+version = "1.0.0"
+
+[script]
+# ton script principal, pas un import externe
+main = "Main.as"
+
+# dépendance au plugin VehicleState
+dependencies = [ "VehicleState" ]
