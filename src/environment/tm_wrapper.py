@@ -6,6 +6,8 @@ import time
 
 
 class TMWrapper:
+    
+  
     def __init__(self, use_camera=True):
         # Camera optionnelle
         self.use_camera = use_camera
@@ -50,20 +52,17 @@ class TMWrapper:
                         break
                     buffer += chunk
 
-                    # Découpage par '\n' = fin de message
+                    #Découpage par '\n' = fin de message
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
                         if not line:
                             continue
 
-                        # DEBUG : voir la ligne brute une fois
-                        # print("RAW LINE:", line)
-
-                        # 1) Ignore les lignes trop courtes
+                        #Ignore les lignes trop courtes
                         if len(line) <= 4:
                             continue
 
-                        # 2) Enlève systématiquement les 4 premiers octets (header)
+                        #Enlève systématiquement les 4 premiers octets (header)
                         json_bytes = line[4:]
 
                         try:
@@ -76,14 +75,14 @@ class TMWrapper:
                         if not text_stripped:
                             continue
 
-                        # 3) Essaye de parser en JSON directement
+                        #Essaye de parser en JSON directement
                         try:
                             data = json.loads(text_stripped)
                         except json.JSONDecodeError as e:
                             print(f"TMWrapper : JSON invalide : {text_stripped!r} ({e})")
                             continue
 
-                        # 4) Mise à jour de l'état interne
+                        #Mise à jour de l'état interne
                         self.current_telemetry = data
                         self.has_telemetry = True
 
