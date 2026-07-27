@@ -4,8 +4,6 @@
 **Date :** 2026-07-20  
 **Statut :** En cours de conception
 
-> **Note langages :** Seul le plugin de télémétrie injecté dans Trackmania 2020 est écrit en **AngelScript** (contrainte OpenPlanet). **Tout le reste du code applicatif** — les 4 processus Python, la GUI, les formats de données — est en **Python**. Les fichiers de modèle (.pt) et les scripts de config (YAML) ne sont pas du code applicatif.
-
 ---
 
 ## Table des Matières
@@ -37,7 +35,7 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 
 | Décision | Technologie | Raison |
 |----------|------------|--------|
-| Envoi des actions au jeu | `vgamepad` + ViEmBus | Émulation de manette Xbox360 native,兼容TM2020 |
+| Envoi des actions au jeu | `vgamepad` + ViEmBus | Émulation de manette Xbox360, TM2020 |
 | Réception de la télémétrie | Socket TCP (plugin AngelScript → Python) | Seul canal disponible depuis OpenPlanet |
 | IPC inter-processus | ZeroMQ (REQ/REP + PUB/SUB) | Léger, asynchrone, reconnect auto |
 | Graphes live | DearPyGUI + ImPlot | Python natif, rendu GPU, zoom/pan |
@@ -55,7 +53,7 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 | **ViGEmBus + vgamepad** | Émulation de manette Xbox360 pour envoyer les actions |
 | **ZeroMQ** | IPC asynchrone entre les 4 processus |
 | **MMAP (/tmp/)** | Buffer partagé pour la télémétrie temps réel |
-| **HDF5** | Stockage永久 des séquences de replay |
+| **HDF5** | Stockage des séquences de replay |
 | **PyTorch** | World Model, inférence et training |
 | **DearPyGUI + ImPlot** | Dashboard live |
 | **YAML** | Fichier de configuration centralisé |
@@ -68,40 +66,40 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         GAME (Trackmania 2020)                       │
-│                   [Plugin AngelScript OpenPlanet]                    │
-│                            │ envoie télémétrie                        │
-│                            ▼                                         │
+│                         GAME (Trackmania 2020)                      │
+│                   [Plugin AngelScript OpenPlanet]                   │
+│                            │ envoie télémétrie                      │
+│                            ▼                                        │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │           GAME INTERFACE PROCESS (game_interface.py)         │   │
+│  │           GAME INTERFACE PROCESS                             │   │
 │  │  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐  │   │
 │  │  │ Telemetry        │ │  Action Sender   │ │ Sync &       │  │   │
-│  │  │ Receiver (socket)│ │  (vgamepad)      │ │ Timestamp    │  │   │
-│  │  │ ← reçoit du jeu  │ │  → envoie au jeu  │ │ Manager      │  │   │
+│  │  │                  │ │                  │ │ Timestamp    │  │   │
+│  │  │ ← reçoit du jeu  │ │  → envoie au jeu │ │ Manager      │  │   │
 │  │  └──────────────────┘ └──────────────────┘ └──────────────┘  │   │
 │  └──────────────────────────────┬───────────────────────────────┘   │
-│                                 │ actions + obs                       │
-│                                 ▼                                    │
+│                                 │ actions + obs                     │
+│                                 ▼                                   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │         CONTROL CENTER PROCESS (control_center.py)            │   │
+│  │         CONTROL CENTER PROCESS                               │   │
 │  │  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐  │   │
-│  │  │  Dashboard GUI   │ │   Orchestrator   │ │  IPC Server  │  │   │
-│  │  │  (DearPyGUI+     │ │  (modes, lifecycle│ │  (ZeroMQ,    │  │   │
-│  │  │   ImPlot)        │ │  des processus)   │ │  REQ/REP)   │  │   │
+│  │  │  Dashboard GUI   │ │                  │ │  IPC Server  │  │   │
+│  │  │                  │ |  Orchestrator    │ │              │  │   │
+│  │  │                  │ │                  │ │              │  │   │
 │  │  └──────────────────┘ └──────────────────┘ └──────────────┘  │   │
 │  └──────────────────────────────┬───────────────────────────────┘   │
 │           IPC ZeroMQ            │                                   │
 │      ┌──────────┴──────────┐    │                                   │
 │      ▼                     ▼    │                                   │
-│  ┌─────────────┐    ┌─────────────┐                                  │
-│  │  INFERENCE  │    │  TRAINING   │                                  │
-│  │  PROCESS    │    │  PROCESS    │                                  │
-│  │(inference_  │    │(training_   │                                  │
-│  │ engine.py)  │    │ worker.py)  │                                  │
-│  └──────┬──────┘    └──────┬──────┘                                  │
+│  ┌─────────────┐    ┌─────────────┐                                 │
+│  │  INFERENCE  │    │  TRAINING   │                                 │
+│  │  PROCESS    │    │  PROCESS    │                                 │
+│  │             │    │             │                                 │
+│  │             │    │             │                                 │
+│  └──────┬──────┘    └──────┬──────┘                                 │
 │         │ modèles +        │ modèles mis à jour                     │
-│         │ transitions      │ (checkpoint atomique)                   │
-│         ▼                  ▼                                         │
+│         │ transitions      │                                        │
+│         ▼                  ▼                                        │
 │  ┌──────────────────────────────────────────────┐                   │
 │  │         SHARED CHECKPOINT DIRECTORY          │                   │
 │  │         checkpoints/model_v{n}.pt            │                   │
@@ -109,7 +107,7 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Processus 1 — Game Interface Process (`game_interface.py`)
+### 2.2 Processus 1 — Game Interface Process
 
 **Rôle :** Pont bidirectionnel entre Trackmania 2020 et le système IA. C'est le seul processus qui communique directement avec le jeu.
 
@@ -119,24 +117,22 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 |----------------|-------------|-------------|
 | **Telemetry Receiver** | Socket TCP (serveur) | Écoute le port configuré, reçoit la télémétrie brute du plugin AngelScript |
 | **Action Sender** | `vgamepad` + ViGEmBus | Envoie throttle/steering/brake au jeu via l'émulation de manette Xbox360 |
-| **Sync & Timestamp Manager** | Python (`time.time_ns()`) | Gère l'horodatage à la source et calcule l'offset action↔observation pour garantir la cohérence des transitions |
 
 **Entrées :**
-- État du jeu : vitesse, position (x,y,z), orientation, checkpoint actuel, temps au tour, nom de la map
+- État du jeu : vitesse, position (x,y,z), rpm, gear, sceenshot
 
 **Sorties :**
-- Actions appliquées via ViGEmBus (throttle ∈ [-1,1], steering ∈ [-1,1], brake ∈ [0,1])
+- Actions appliquées via ViGEmBus (throttle ∈ [|-1,1|], steering ∈ [-1,1], brake ∈ [|0,1|])
 - Observations formatées → diffuseur via ZeroMQ
 
-**Fréquence :** 50 Hz (20ms par cycle)
+**Fréquence :** 10Hz
 
 **Contraintes :**
-- Ce processus doit tourner en temps réel sans drops
-- Le Sync & Timestamp Manager insère un timestamp haute résolution (`time.time_ns()`) dès réception de la trame, avant tout traitement, pour minimiser le jitter
+- Ce processus doit tourner en temps réel sans drops 
 
 ---
 
-### 2.3 Processus 2 — Control Center Process (`control_center.py`)
+### 2.3 Processus 2 — Control Center Process
 
 **Rôle :** Centre de contrôle et d'observation. Affiche le dashboard et orchestre le cycle de vie des autres processus.
 
@@ -148,7 +144,7 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 | **Orchestrator** | Python (boucle de contrôle) | Change le mode de jeu (Adaptation/Repérage/Imitation), démarre/arrête les processus enfants, détecte les crashs et restart auto |
 | **IPC Server** | ZeroMQ (REQ/REP + PUB/SUB) | Serveur central : les processus clients (Inference Process, Training Process) se connectent et recv avec timeout + reconnexion auto |
 
-**Fréquence :** 50 Hz pour l'affichage (throttled si charge CPU)
+**Fréquence :** 10Hz (GUI update)
 
 **Points clés :**
 - L'Orchestrator est le seul composant qui décide quand basculer de mode
@@ -157,7 +153,7 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 
 ---
 
-### 2.4 Processus 3 — Inference Process (`inference_engine.py`)
+### 2.4 Processus 3 — Inference Process
 
 **Rôle :** Charge le World Model et l'utilise pour décider les actions en temps réel.
 
@@ -166,26 +162,25 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 | Sous-composant | Technologie | Description |
 |----------------|-------------|-------------|
 | **Model Loader** | PyTorch | Charge le dernier checkpoint (détection via `version.txt`) et garde le modèle en mémoire |
-| **Forward Pass Engine** | PyTorch | Effectue la prédiction (actions) à partir de l'observation courant |
-| **Transition Collector** | Python | Assemble les paires (observation, action, reward, next_obs) dans un buffer temporaire |
+| **Forward Pass** | PyTorch | Effectue la prédiction (actions) à partir de l'observation courant |
+| **Transition Collector** | Python | Assemble les paires (observation, action, next_obs) dans un buffer temporaire |
 | **Checkpoint Watcher** | Python (file polling) | Surveille `version.txt` toutes les ~100ms pour détecter un nouveau checkpoint issu du Training Process |
 
 **Entrées :**
-- Observations depuis le Game Interface Process (via ZeroMQ)
+- Observations depuis le Game Interface Process (via ZeroMQ toute les 1-3 secondes)
 - Modèle depuis le dernier checkpoint (`checkpoints/model_v{n}.pt`)
 
 **Sorties :**
 - Actions de contrôle → Game Interface Process (via ZeroMQ PUSH)
 - Données de transition → Training Process (via ZeroMQ PUSH)
 
-**Fréquence :** 50 Hz (20ms par cycle)  
-**Latence cible :** < 5ms par inférence
+**Fréquence :** 10Hz
 
 **Mode Imitation :** En mode Imitation, les actions ne viennent plus du modèle mais directement du fichier de replay HDF5 (le World Model est bypassé en lecture).
 
 ---
 
-### 2.5 Processus 4 — Training Process (`training_worker.py`)
+### 2.5 Processus 4 — Training Process
 
 **Rôle :** Entraîne le World Model en arrière-plan. Strictement limité aux opérations de training — pas d'inférence, pas de décision.
 
@@ -196,11 +191,12 @@ Le système fonctionne sans accès au code source du jeu. Il interagit avec TM20
 | **Data Loader** | HDF5 (`h5py`) | Lit les séquences stockées depuis `ltm_sequences.h5` |
 | **Training Loop** | PyTorch (forward + backward) | Effectue les forward passes, calcule la loss, fait la backpropagation et l'optimisation |
 | **Checkpoint Writer** | Python (atomic write) | Sauvegarde le nouveau modèle via fichier temporaire + `os.rename()` atomique |
-| **Version Manager** | Python (`version.txt`) | Incrémente le numéro de version après chaque checkpoint写得成功 |
+| **Version Manager** | Python (`version.txt`) | Incrémente le numéro de version après chaque checkpoint |
 
 **Entrées :**
-- Séquences depuis HDF5 (état + actions + rewards)
-- Modèle actuel depuis le dernier checkpoint
+- Séquences depuis HDF5 (état + actions)  (via dossier .h5)
+- Quel sous-model entrainer et avec quel batch (via Control Center Process)
+- Modèle actuel depuis le dernier checkpoint (interne)
 
 **Sorties :**
 - Nouveaux checkpoints sauvegardés dans `checkpoints/model_v{n+1}.pt`
@@ -277,68 +273,9 @@ TEMPS ──►
     • Les futures inférences utilisent les poids mis à jour
 ```
 
-### 3.2 Schéma temporel simplifié
+### 3.2 Stratégie de partage du modèle entre Inference et Training
 
-```
-TM2020 (game loop 50Hz)
-  │
-  │ [1] Envoie télémétrie
-  ▼
-GAME INTERFACE PROCESS
-  │ [2] Reçoit + horodate
-  │ [3] Sync offset
-  ▼
-ZeroMQ: observations
-  │
-  │ [4] Relay
-  ▼
-CONTROL CENTER PROCESS
-  │ (GUI update, mode decisions)
-  ▼
-ZeroMQ: observations_repeated
-  │
-  │ [5] Forward pass
-  ▼
-INFERENCE PROCESS
-  │ [6] Sample action
-  │ [7] Reward
-  │ [8] Buffer transitions
-  ▼
-ZeroMQ: actions
-  │
-  │ [6] Applique action
-  ▼
-ViGEmBus → TM2020
-
-ZeroMQ: transitions
-  │ [8] Envoie batch
-  ▼
-TRAINING PROCESS
-  │ [9] Train + write checkpoint
-  ▼
-checkpoints/model_v{n+1}.pt + version.txt
-
-  │ [10] Détecte nouveau checkpoint
-  ▼
-INFERENCE PROCESS (reload)
-```
-
-### 3.3 Les 3 modes de jeu — quand et pourquoi
-
-| Mode | Orchestrator dit… | Ce qui change | Training actif ? |
-|------|------------------|--------------|-------------------|
-| **Adaptation** | `"mode": "adaptation"` | Inference avec modèle + epsilon-greedy. Collecte active. | ✅ Oui — chaque batch déclenche un cycle de training |
-| **Repérage** | `"mode": "reperage"` | Epsilon élevé (exploration pure). Le modèle reste statique. Collecte maximale. | ❌ Non — on remplit le HDF5 sans modifier les poids |
-| **Imitation** | `"mode": "imitation"` | Actions lues directement depuis les replays HDF5 (pas du modèle). Collecte des erreurs du modèle vs replay humain. | ✅ Oui (comparatif) — loss = distance entre action du modèle et action du replay |
-
-**Comment l'Orchestrator bascule :**
-- Via GUI (bouton dans le Dashboard)
-- Via script externe (envoie `CHANGE_MODE` via ZeroMQ au Control Center Process)
-- Automatiquement : si epsilon = 1.0 pendant N frames (sortie de piste), on force le mode Repérage pour re-collecter
-
-### 3.4 Stratégie de partage du modèle entre Inference et Training
-
-Le modèle n'est **jamais partagé directement en mémoire** entre l'Inference Process et le Training Process. Le partage se fait via **checkpoints文件系统** avec un protocole de synchronisation :
+Le modèle n'est **jamais partagé directement en mémoire** entre l'Inference Process et le Training Process. Le partage se fait via **checkpoints** avec un protocole de synchronisation :
 
 ```
 TRAINING PROCESS                     INFERENCE PROCESS
@@ -361,7 +298,7 @@ TRAINING PROCESS                     INFERENCE PROCESS
 
 **Pourquoi pas de mémoire partagée :**
 - PyTorch tensors ne sont pas directement partageables entre processus Python sans copie
-- La copie via `multiprocessing` / shared memory ajouterait de la complexité et des的风险 de deadlock
+- La copie via `multiprocessing` / shared memory ajouterait de la complexité et des deadlock
 - Le mécanisme de checkpoint filesystem est robuste, simple, et tolerant aux crashs
 
 **Résilience :**
@@ -376,40 +313,40 @@ TRAINING PROCESS                     INFERENCE PROCESS
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    GAME INTERFACE PROCESS                         │
-│  output: actions       ───────────────────────────────────────►  │
-│  output: observations  ───────────────────────────────►           │
-│                                            │                     │
-└─────────────────────────────────────────────│─────────────────────┘
-                                              │
+│                    GAME INTERFACE PROCESS                        │
+│                                                                  │
+│  OUTPUT: observations  ─────────────────────────────────────────►│
+│  INPUR: action   ◄────────────────────────────────────────────── │
+└────────────────────────────────────────────│─────────────────────┘
+                                             │
                           ┌──────────────────┴──────────────┐
-                          │   ZeroMQ PUB/SUB / PUSH/PULL     │
+                          │   ZeroMQ PUB/SUB / PUSH/PULL    │
                           └──────────────────┬──────────────┘
-                          ┌──────────────────┴──────────────┐
+                          ┌──────────────────┴───────────┐
                           │                              │
 ┌─────────────────────────▼──────────────────────────────▼───┐
-│                   CONTROL CENTER PROCESS                     │
-│                                                               │
-│  INPUT: observations      ◄──────────────────────────────────  │
-│  INPUT: action_results    ◄──────────────────────────────────  │
-│  INPUT: training_logs     ◄────────────────┐                 │
-│                                                               │
-│  OUTPUT: mode_change ────────────────────────────►            │
-│  OUTPUT: control_cmd ────────────────────────────►            │
-└────────────────────────────────────────────────────────────────┘
-                                              │
+│                   CONTROL CENTER PROCESS                   │
+│                                                            │
+│  INPUT: observations      ◄────────────────────────────────│
+│  INPUT: action            ◄────────────────────────────────│
+│  INPUT: training_logs     ◄────────────────────────────────│
+│                                                            │
+│  OUTPUT: mode_change ─────────────────────────────────────►│
+│  OUTPUT: control_cmd ─────────────────────────────────────►│
+└────────────────────────────────────────────────────────────┘
+                                             │
                           ┌──────────────────┴──────────────┐
-                          │   ZeroMQ PUSH / REQ              │
+                          │   ZeroMQ PUSH / REQ             │
                           └──────────────────┬──────────────┘
-                          ┌──────────────────┴──────────────┐
+                          ┌──────────────────┴───────────┐
                           │                              │
 ┌─────────────────────────▼──┐          ┌────────────────▼───────────┐
-│  INFERENCE PROCESS          │          │  TRAINING PROCESS          │
+│  INFERENCE PROCESS         │          │  TRAINING PROCESS          │
 │                            │          │                            │
-│  OUTPUT: transitions ──────►│          │  OUTPUT: checkpoint_done ──►│
-│  OUTPUT: status ───────────►│          │                            │
-│  INPUT: mode_change ◄──────┘          │                            │
-└──────────────────────────┘          └────────────────────────────┘
+│  OUTPUT: action ──────────►│          │  OUTPUT: checkpoint_done ─►│
+│  OUTPUT:                ──►│          │                            │
+│  INPUT: mode_change ◄──────|          │                            │
+└────────────────────────────┘          └────────────────────────────┘
 ```
 
 ### 4.2 Détail des files ZeroMQ
@@ -429,16 +366,10 @@ TRAINING PROCESS                     INFERENCE PROCESS
 ```json
 {
     "type": "observation",
-    "timestamp": 1705593600123000000,
+    "screenshot": "base64-encoded-image",
     "speed": 45.2,
     "position": {"x": 100.5, "y": 200.3, "z": 5.0},
-    "orientation": {"pitch": 0.1, "yaw": 1.57, "roll": 0.05},
-    "velocity": {"vx": 44.0, "vy": 10.0, "vz": 0.5},
-    "lap_time_ms": 45230,
-    "current_checkpoint": 3,
-    "total_checkpoints": 8,
-    "map_name": "Summer2024_Race01",
-    "is_on_track": true
+    "finished": false,
 }
 ```
 
@@ -446,9 +377,7 @@ TRAINING PROCESS                     INFERENCE PROCESS
 ```json
 {
     "type": "action",
-    "timestamp_sent": 1705593600123020000,
-    "timestamp_observation": 1705593600123000000,
-    "throttle": 0.85,
+    "throttle": 1.0,
     "steering": -0.12,
     "brake": 0.0
 }
@@ -459,19 +388,6 @@ TRAINING PROCESS                     INFERENCE PROCESS
 {
     "type": "mode_change",
     "mode": "adaptation",
-    "timestamp": 1705593601000
-}
-```
-
-**Message Transition (données de training) :**
-```json
-{
-    "type": "transition",
-    "observation": {...},
-    "action": [0.85, -0.12, 0.0],
-    "reward": 1.2,
-    "next_observation": {...},
-    "done": false
 }
 ```
 
@@ -490,102 +406,78 @@ TRAINING PROCESS                     INFERENCE PROCESS
 
 ### 5.1 Memory-Mapped File (MMAP) — Buffer temps réel
 
-**Fichier :** `/tmp/ltm_telemetry.mmap`
+**Fichier :** `.../ .mmap`
 
-**Usage :** Buffer circulant partagé entre Game Interface Process et Inference Process pour éviter la latence des messages ZeroMQ sur le chemin critique de l'inférence. Chaque processus lit directement depuis la mémoire, sans overhead réseau.
+**Usage :** Buffer qui servira le process d'inférence. Les données dans ce buffer ne remplacent pas les données stockées dans HDF5. Elles vont servir à recalibrer les embeddings rapidement en enlevant la latence de la récupération des données. Ce buffer contiendra les screenshots depuis le dernier recalibrage des embeddings. Toutes les 20 à 30 frames, il sera complètement vidé pour être rerempli. Chaque donnée enregistrée dans ce buffer le sera aussi dans le dossier HDF5.
 
 **Structure :**
 
 ```
-/tmp/ltm_telemetry.mmap (100 frames × 32 bytes = 3200 bytes)
-┌──────────┬──────────┬──────────┬──────────┐
-│ Frame 0  │ Frame 1  │   ...    │ Frame 99 │
-│  32 B    │  32 B    │          │  32 B    │
-└──────────┴──────────┴──────────┴──────────┘
+┌───────────────┬───────────────┬──────────┬──────────────────┐
+│ Screenshot 1  │ Screenshot 2  │   ...    │ Screenshot 20-30 │
+│               │               │          │                  │
+└───────────────┴───────────────┴──────────┴──────────────────┘
      ▲
  read_idx (Inference Process lit ici)
      │
  write_idx (Game Interface Process écrit ici)
 ```
 
-**Chaque frame (32 bytes) :**
-| Offset | Size | Champ | Type |
-|--------|------|-------|------|
-| 0 | 8 | timestamp_ns | uint64 |
-| 8 | 4 | speed | float32 |
-| 12 | 12 | position (x,y,z) | float32 × 3 |
-| 24 | 4 | current_checkpoint | int16 |
-| 26 | 4 | lap_time_ms | int32 |
-| 30 | 2 | flags (on_track, finished) | uint16 |
+### 5.2 HDF5 — Stockage permanent des données
 
-**Pourquoi MMAP :**
-- Latence d'accès < 0.1ms (pas de sérialisation/désérialisation)
-- Pas de copie mémoire entre processus
-- Buffer circulant : l'Inference Process peut toujours lire la dernière frame même si le write_idx a一圈
+**Fichier :** `.../.h5`
 
-### 5.2 HDF5 — Stockage permanent des séquences
-
-**Fichier :** `/data/ltm_sequences.h5`
-
-**Usage :** Stockage永久 des replays collectés (observations + actions + rewards). Accessible en lecture aléatoire pour le Training Process.
+**Usage :** Stockage des données collectées (screenshots + actions + télémétrie minimale : vitesse, gear, rpm). Accessible en lecture pour le Training Process.
 
 **Structure :**
 
 ```
-ltm_sequences.h5
-├── /observations
-│   ├── shape: (N, 30, 15)
-│   │   └── N = nombre de séquences, 30 = steps, 15 = features
-│   ├── dtype: float32
-│   └── chunks: (100, 30, 15)
+├── /screenshots
+│   ├── shape: (N, H, W, C)
+│   │   └── N = nombre de frames (axe temps)
+│   ├── dtype: uint8
+│   └── chunks: (1, H, W, C)
 │
 ├── /actions
-│   ├── shape: (N, 30, 3)
+│   ├── shape: (N, 3)
 │   │   └── [throttle, steering, brake]
-│   └── chunks: (100, 30, 3)
+│   ├── dtype: float32
+│   └── chunks: (256, 3)
 │
-├── /rewards
-│   ├── shape: (N, 30)
-│   └── chunks: (100, 30)
+├── /speed
+│   ├── shape: (N,)
+│   ├── dtype: float32
+│   └── chunks: (256,)
 │
-├── /metadata
-│   ├── /timestamps       (N,) float64
-│   ├── /map_names        (N,) string
-│   ├── /lap_times        (N,) float32
-│   ├── /checkpoints_max  (N,) int16
-│   └── /is_adaptation    (N,) bool   ← pour filtrer par mode
+├── /gear
+│   ├── shape: (N,)
+│   ├── dtype: int8
+│   └── chunks: (256,)
 │
-└── /next_observations
-    ├── shape: (N, 30, 15)
-    └── chunks: (100, 30, 15)
+└── /rpm
+    ├── shape: (N,)
+    ├── dtype: float32
+    └── chunks: (256,)
 ```
 
-**15 features par step d'observation :**
-1. speed
-2. velocity_x
-3. velocity_y
-4. velocity_z
-5. pos_x
-6. pos_y
-7. pos_z
-8. orientation_pitch
-9. orientation_yaw
-10. orientation_roll
-11. current_checkpoint / total_checkpoints (ratio)
-12. lap_time_normalized
-13. is_on_track
-14. throttle_prev
-15. steering_prev
+**Données stockées à chaque instant `i` :**
+1. `screenshots[i]` — image `(H, W, C)`, `uint8`
+2. `actions[i]` — `[throttle, steering, brake]`, `float32`
+3. `speed[i]` — vitesse, `float32`
+4. `gear[i]` — rapport engagé, `int8`
+5. `rpm[i]` — régime moteur, `float32`
+
+Tous les datasets partagent la **1ʳᵉ dimension = axe temps** : l'index `i` désigne le même instant dans chacun d'eux (`screenshots[i]` correspond à `actions[i]`, `speed[i]`, etc.).
 
 **Configuration :**
-- Compression : `gzip` niveau 4
-- Chunk size : (100, 30, 15) — optimisé pour lectures par batch
+- Compression : `gzip` niveau 4 (surtout utile sur `/screenshots`, le plus gros poste disque)
+- Chunk size : par dataset (voir schéma) — `(1, H, W, C)` pour un accès frame par frame des images ; `(256, …)` pour la télémétrie. À ajuster vers `(k, H, W, C)` (k≈8-16) si le training lit surtout des séquences contiguës.
 
 ---
 
 ## 6. Gestion des checkpoints
 
-### 6.1 Principe — Atomicité文件系统
+### 6.1 Principe — Atomicité
 
 Tout crash (Training Process, Inference Process, ou système) ne doit jamais produire un checkpoint corrompu. La stratégie :
 
@@ -650,27 +542,30 @@ version.txt              # Contient: "5"
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  LTM-AI Control Center                              [─][□][×]   │
-├───────────────┬─────────────────────────────────────────────────┤
-│               │  MODES                                             │
-│   PROCESS     │  ┌──────────┐ ┌──────────┐ ┌──────────┐        │
-│   STATUS      │  │ Adaptation│ │ Repérage │ │ Imitation│        │
-│               │  └──────────┘ └──────────┘ └──────────┘        │
-│  ● Game IF  ✓  │                                                   │
-│  ● Control ✓  │  LIVE GRAPHS                                      │
-│  ● Inference✓ │  ┌───────────────────────────────────────┐     │
-│  ● Training ○  │  │  Speed / Reward / Loss (ImPlot)      │     │
-│               │  │                                       │     │
-│  FREQUENCY    │  │                                       │     │
-│  50.2 Hz      │  │                                       │     │
-│               │  └───────────────────────────────────────┘     │
-│  EPOCH #42    │                                                   │
-│  Epsilon 0.05 │  TELEMETRY                                        │
-│  Loss 0.023   │  Speed: 45.2 km/h  Pos: (100.5, 200.3, 5.0)     │
-│  Model v7     │  Checkpoint: 3/8  Lap: 45.2s                     │
-│               │                                                   │
-├───────────────┴─────────────────────────────────────────────────┤
-│  Log: [INFO] Mode switched to Adaptation | Epoch 42 done        │
-└─────────────────────────────────────────────────────────────────┘
+├─────────────────────────────────────────────────────────────────┤
+│                   │                                             │
+│  │ Normal mode │  │                                             │
+│  ───────────────  │                                             │
+│  │ Adaptation  │  │                                             │
+│  ───────────────  │   Graphiques des loss et des temps du       │
+│  │ Repérage    │  │    model sur la map actuel                  │
+│  ───────────────  │                                             │
+│  │ Imitation   │  │                                             │                          
+│  ───────────────  │                                             │
+│ ────────────────────────────────────────────────────────────────│
+│  Possibilité de boutons supplémentaires(optimisation active,    │
+│  validation du replay pour imitation etc...)│                   │
+│─────────────────────────────────────────────────────────────────│  
+│                                                                 │
+|      gear, rpm etc...          Affichages des actions du model  │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│                                                                 │
+│  Log: [INFO] Mode switched to Adaptation                        │
+│  Log: [INFO] Checkpoint model_v7.pt loaded                      │
+│  Log: ...                                                       │
+└─────────────────────────────────────────────────────────────────┘S
 ```
 
 ### 7.2 Fonctionnalités confirmées DearPyGUI + ImPlot
@@ -686,27 +581,11 @@ version.txt              # Contient: "5"
 
 ---
 
-## 8. Modes de jeu : Adaptation / Repérage / Imitation
+## 8. Modes de jeu : Inference / Adaptation / Repérage / Imitation
 
-### 8.1 Résumé des 3 modes
+### 8.1 Description des modes:
 
-**Mode Adaptation (par défaut) :**
-- Le World Model prend les décisions (forward pass)
-- Epsilon-greedy faible (exploration contrôlée, configurable 0.0-0.2)
-- Training actif : chaque batch déclenche un cycle de resynchro
-- Collecte active des transitions
-
-**Mode Repérage :**
-- Le World Model prend les décisions avec epsilon élevé (0.3-0.5)
-- Training inactif : les poids ne sont PAS mis à jour
-- Collecte maximale : on remplit le HDF5 sans coût de training
-- Utile pour : cartographier de nouvelles maps,收集 des données variées
-
-**Mode Imitation :**
-- Actions lues directement depuis les replays HDF5 (données humaines)
-- Le World Model est en mode "bypass lecture" : on compare action prédite vs action du replay
-- Training actif : la loss est la distance entre prédiction du modèle et action humaine
-- Utile pour : warm-start le modèle sur un style de conduite connu
+    !!!!!!!!!!!!
 
 ### 8.2 Changement de mode
 
@@ -714,16 +593,15 @@ version.txt              # Contient: "5"
 |-------------|--------|
 | Bouton dans le Dashboard GUI | Envoie `mode_change` via ZeroMQ |
 | Script externe (CLI) | Envoie `CHANGE_MODE` au Control Center Process |
-| Automatique (sortie de piste) | Orchestrator force Repérage si `is_on_track=false` pendant >3s |
 | Automatique (fin d'epoch) | Orchestrator peut basculer vers Repérage si loss stagnante |
 
-### 8.3 Questions ouvertes
+### 8.3 Questions
 
 | Question | Statut |
 |----------|--------|
-| Comment basculer entre modes de manière fluide (sans drop de frames) ? | À finaliser dans l'implémentation |
+| Comment basculer entre modes de manière fluide (sans drop de frames) ? | Ce ne sera pas le cas, les modes ne sont pas fait pour être interchangé rapidement |
 | Le mode Imitation nécessite-t-il un fichier de replay humain pre-collecté ? | Oui — un replay HDF5 doit exister avec les bonnes séquences |
-| Sauvegarde séparée des données par mode dans HDF5 ? | Oui — champ `is_adaptation` dans `/metadata/is_adaptation` |
+| Sauvegarde séparée des données par mode dans HDF5 ? | Oui — chaque mode aura son propore sous dossier qui contiendra la data enregistré à l'ocasion de ce mode et/ou pour son entrainement|
 
 ---
 
@@ -865,31 +743,3 @@ modes:
     collect_enabled: true
     replay_file: "/data/human_replays.h5"
 ```
-
----
-
-## 10. Glossaire
-
-| Terme | Définition |
-|-------|-----------|
-| **World Model** | Modèle qui prédit les futures observations et rewards, learns a representation of the environment dynamics |
-| **ZeroMQ** | Bibliothèque de messaging asynchrone légère, utilisée pour l'IPC entre processus |
-| **ViGEmBus** | Driver Windows qui émule des manettes Xbox360 ; utilisé avec `vgamepad` pour envoyer des inputs au jeu |
-| **AngelScript** | Langage de script utilisé par OpenPlanet pour injecter du code dans TM2020 — seul le plugin de télémétrie est en AngelScript |
-| **MMAP** | Memory-mapped file — fichier mape en mémoire pour accès ultra-rapide entre processus |
-| **Checkpoint** | Sauvegarde complète des poids du modèle PyTorch, écriture atomique pour éviter les corruptions |
-| **DearPyGUI** | Bibliothèque Python de GUI basée sur Dear ImGui, avec support natif de graphes temps réel via ImPlot |
-| **HDF5** | Format de fichier pour datasets scientifiques volumineux, accès aléatoire rapide, compression optionnelle |
-| **Epsilon-greedy** | Stratégie d'exploration : avec probabilité epsilon, on choisit une action aléatoire ; sinon, on choisit la meilleure action prédite |
-| **Transition** | Tuple (observation, action, reward, next_observation, done) utilisé pour entraîner le World Model |
-| **IPC** | Inter-Process Communication — mécanisme de communication entre processus séparés |
-| **OpenPlanet** | Plugin Framework pour Trackmania 2020, supporte lAngelScript et permet d'accéder à la télémétrie interne du jeu |
-
----
-
-## Historique des modifications
-
-| Version | Date | Description |
-|---------|------|-------------|
-| 1.0 | 2026-01-18 | Version initiale complète |
-| 2.0 | 2026-07-20 | Renommage des 4 processus avec noms explicites + ajout section fonctionnement bout-en-bout + suppression pseudo-codes + clarification langages (AngelScript = plugin télémétrie uniquement) |
