@@ -24,7 +24,7 @@
 
 ---
 
-## 1. Vue d'ensemble du projet et objectifs
+## 1. Vue d'ensemble du projet et objectifs --------- OK
 
 ### 1.1 Objectif général
 
@@ -33,7 +33,7 @@ LTM-AI (Latent Trackmania AI) est un projet visant à construire un agent d'inte
 - **Joue de manière compétitive** sur des circuits variés, en produisant destemps cohérents avec un conduite naturelle.
 - **S'adapte en continu** sur des maps inconnues, c'est-à-dire qu'il est capable de performer sur un circuit jamais vu auparavant sans réentraînement depuis zéro, en exploitant son expérience préalable et en explorant rapidement la trajectoire optimale.
 - **Minimise l'intervention humaine**, tant en phase d'entraînement (collecte automatisée de données) qu'en phase de jeu (aucune action requise de l'opérateur pendant l'exécution).
-- **Fonctionne en temps réel** à la fréquence du jeu (50 Hz), sans drop ni latence perceptible dans la boucle de contrôle.
+- **Fonctionne en temps réel** à la fréquence du jeu (10 Hz), sans drop ni latence perceptible dans la boucle de contrôle.
 
 ### 1.2 Décisions validées
 
@@ -74,7 +74,7 @@ LTM-AI (Latent Trackmania AI) est un projet visant à construire un agent d'inte
 
 La manière naive d'aborder le problème serait de donner au modèle une image brute du jeu (résolution écran, soit des millions de valeurs par frame) et de l'entraîner à prédire les bons inputs. Cette approche pose plusieurs problèmes concrets :
 
-1. **Coût computationnel prohibitif** : un modèle qui traite des images brutes à 50 Hz nécessite des architectures lourdes (CNN profondes), avec un temps d'inférence incompatible avec la boucle de jeu temps réel sur du matériel domestique.
+1. **Coût computationnel prohibitif** : un modèle qui traite des images brutes à 10 Hz nécessite des architectures lourdes (CNN profondes), avec un temps d'inférence incompatible avec la boucle de jeu temps réel sur du matériel domestique.
 
 2. **Redondance de l'information** : une screenshot de Trackmania contient énormément d'informations visuelles non pertinentes pour la conduite (publicités bords de piste, spectateurs, effets visuels). L'essentiel de ce qui compte pour la conduite se réduit à un ensemble limité de features : vitesse, accélération, orientation, position sur la route, distance au checkpoint suivant.
 
@@ -137,7 +137,6 @@ Les embeddings ne sont pas statiques : ils évoluent au cours de la run en fonct
 Le modèle prend en entrée la concaténation des deux embeddings (voiture + environnement) et produit en sortie :
 
 - **Action continue** : {throttle, steering, brake} (valeurs réelles dans [-1, 1] ou [0, 1]).
-- **Estimation du Q-value / reward attendu** (optionnel, pour le debugging et l'analyse).
 
 L'architecture interne est **à définir** (feedforward simple ? GRU/LSTM ? Transformer léger ?). Le document original mentionne `[256, 128, 64]` comme taille des hidden layers. Cette valeur est un point de départ mais doit être validée par expérimentation en fonction de la dimension des embeddings.
 
@@ -149,7 +148,7 @@ Un **buffer circulaire** tourne en permanence dans le Game Interface Process, st
 2. **Recalibrer les embeddings** via le mécanisme décrit en 2.2.3.
 3. **Alimenter le dataset d'entraînement** : les frames du buffer sont périodiquement écrites dans le HDF5 ou directement dans le MMAP selon le mode actif.
 
-**Taille du buffer** : **à définir** (compromis entre temps de stockage effectif et mémoire consommée). Une valeur de 100 frames (2 secondes à 50 Hz) est un point de départ raisonnable.
+**Taille du buffer** : **à définir** (compromis entre temps de stockage effectif et mémoire consommée). Une valeur de 15-20 frames (2 secondes à 10 Hz) est un point de départ raisonnable.
 
 **Implémentation** : le buffer est un `numpy.ndarray` de forme `(N, D)` où D est le nombre de features par frame (vitesse, position xyz, orientation quaternion, inputs actuels, etc.). Les écritures se font en cercle avec un index de tête.
 
@@ -244,7 +243,7 @@ Le pipeline ne passe **jamais par des fichiers .Gbx**. L'approche est la suivant
 
 ### 3.3 Mode Inférence
 
-**Objectif** : mode "jeu pur" — exécuter le modèle en temps réel sans aucun apprentissage, sans aucune collecte de données, pour jouer de manière compétitive.
+**Objectif** : mode "jeu pur" — exécuter le modèle en temps réel pour jouer de manière compétitive. La récolte de données sera toujours active et le model sera quand même entrainé dans le Training process. La spécificité et que le model ne sera pas changer toutes les 20s mais entre chaque run.
 
 **Entrées** : la télémétrie courante du jeu, le modèle chargé depuis le dernier checkpoint.
 
@@ -254,22 +253,21 @@ Le pipeline ne passe **jamais par des fichiers .Gbx**. L'approche est la suivant
 - ✅ Plugin in-game (télémétrie)
 - ✅ Game Interface Process (réception)
 - ✅ Inference Process (forward pass, production des actions)
-- ❌ Training Process (inactif)
-- ❌ Collecte de données (désactivée — pas de MMAP flush ni d'écriture HDF5)
+- ✅ Training Process (inactif)
+- ✅ Collecte de données (désactivée — pas de MMAP flush ni d'écriture HDF5)
 
 **Ce qui est spécifique au mode Inférence** :
-- Pas de collecte de données, pas d'entraînement, pas de modification du buffer.
 - L'objectif est la performance pure : vitesse d'inférence maximale, latence minimale.
 - Le modèle peut être en mode "evaluation" (dropout désactivé, batchnorm en mode eval).
-- L'embedding voiture et environnement sont toujours calculés (ils sont nécessaires pour l'inférence), mais ils ne sont pas persistés.
+- La récolte de donné se fera quand même et tout sera stocké dans le HDF5.
 
-**Quand utiliser ce mode** : benchmarking, compétition, démonstrations, quand on veut jouer sans polluer le dataset avec des données issues d'un modèle non encore convergé.
+**Quand utiliser ce mode** : benchmarking, compétition, démonstrations avec un aspect mineur sur l'entrainement(aspect à ne pas complètement négliger).
 
 ---
 
 ### 3.4 Mode Adaptation
 
-**Objectif** : exploration autonome de trajectoires sur un circuit partiellement ou totalement inconnu, en utilisant la cross-entropy method (CEM) pour générer et évaluer des trajectoires candidates, et en mettant à jour les poids du modèle périodiquement.
+**Objectif** : exploration autonome de trajectoires sur un circuit partiellement ou totalement inconnu, en utilisant une méthode analogue à la cross-entropy method (CEM) pour générer et évaluer des trajectoires candidates, et en mettant à jour les poids du modèle périodiquement.
 
 **C'est le mode le plus complexe du système.** Il est détaillé en section 4.
 
@@ -423,7 +421,7 @@ Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adap
 
 ---
 
-## 5. Format de stockage des données (MMAP + HDF5)
+## 5. Format de stockage des données (MMAP + HDF5) --------- OK
 
 ### 5.1 MMAP — Buffer temps réel
 
@@ -435,16 +433,16 @@ Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adap
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Buffer circulaire (N frames)                                │
+│  Buffer circulaire (N frames)                               │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────┐   │
 │  │ frame 0  │ frame 1  │ frame 2  │   ...    │ frame N-1│   │
 │  └────┬─────┴──────────┴──────────┴──────────┴──────────┘   │
-│       │                                                        │
-│   write_idx ──────────────────► avance à chaque frame        │
-│   (Game Interface Process)                                     │
-│                                                              │
-│   read_idx ───────────────────► avance après flush secteur   │
-│   (Inference Process lit, Training Process consomme)         │
+│       │                                                     │
+│   write_idx ──────────────────► avance à chaque frame       │
+│   (Game Interface Process)                                  │
+│                                                             │
+│   read_idx ───────────────────► avance après flush secteur  │
+│   (Inference Process lit, Training Process consomme)        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -452,32 +450,22 @@ Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adap
 
 | Champ | Position | Type | Description |
 |-------|----------|------|-------------|
-| timestamp | 0 | float64 | Timestamp Unix de la frame |
-| speed | 8 | float32 | Vitesse en m/s |
-| pos_x | 12 | float32 | Position X |
-| pos_y | 16 | float32 | Position Y |
-| pos_z | 20 | float32 | Position Z |
-| quat_w | 24 | float32 | Orientation quaternion w |
-| quat_x | 28 | float32 | Orientation quaternion x |
-| quat_y | 32 | float32 | Orientation quaternion y |
-| quat_z | 36 | float32 | Orientation quaternion z |
-| steer | 40 | float32 | Input steering courant [-1, 1] |
-| throttle | 44 | float32 | Input throttle courant [0, 1] |
-| brake | 48 | float32 | Input brake courant [0, 1] |
-| rpm | 52 | float32 | Régime moteur |
-| gear | 56 | int8 | Rapport engagé |
-| sector_id | 57 | int16 | ID du secteur courant |
-| map_id | 59 | int32 | ID de la map |
-| mode | 63 | uint8 | Mode d'origine (0=inference, 1=reperage, 2=adaptation, 3=imitation) |
-| reserved | 64 | - | Padding pour alignement |
+| timestamp | ? | float64 | Timestamp Unique de la frame |
+| screenshot | ? | ?| screenshgot du moment |
+| speed | ?  | float32 | Vitesse en m/s |
+| position | ? | float32[3] | Position xyz |
+| steer | ? | float32 | Input steering courant [-1, 1] |
+| throttle | ? | float32 | Input throttle courant [0, 1] |
+| brake | ? | float32 | Input brake courant [0, 1] |
+| rpm | ? | float32 | Régime moteur |
+| gear | ? | int8 | Rapport engagé |
+| reserved | ? | - | Padding pour alignement |
 
-**Taille d'une frame** : 64 bytes (aligné). Avec N = 100 frames, le buffer MMAP fait 6 400 bytes — trivial.
 
 **Mécanisme de lecture/écriture** :
 
 - Le **Game Interface Process** écrit à `write_idx` et incrémente modulo N.
 - L'**Inference Process** lit à `read_idx`. Entre `read_idx` et `write_idx` (modulo), il y a les frames non encore consommées.
-- Quand le secteur est terminé, le **Training Process** lit le contenu du buffer entre `read_idx` et `write_idx`, le flush dans le HDF5, et avance `read_idx` à la position de `write_idx`.
 
 **Résilience** : en cas de crash du Game Interface Process, le buffer MMAP contient les dernières frames. Le Training Process peut détecter un crash (le write_idx ne bouge plus pendant un certain temps) et reprendre proprement.
 
@@ -485,7 +473,7 @@ Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adap
 
 **Fichier** : `/data/ltm_sequences.h5` (chemin configurable via YAML)
 
-**Rôle** : stockage permanent de toutes les séquences de replay collectées, structuré par map, par secteur, et par mode d'origine. Ce fichier est la source de données pour l'entraînement.
+**Rôle** : stockage permanent de toutes les séquences de replay collectées, structuré par map, par secteur, et par mode d'origine. Ce fichier est la source de données pour l'entraînement. A chaque lancement du programme complet, un .h5 sera créé ou mis à jour avec les nouvelles données collectées
 
 **Structure hiérarchique** :
 
@@ -493,95 +481,121 @@ Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adap
 ltm_sequences.h5
 ├── /maps
 │   ├── /{map_id_1}
+│   │   ├── /metadata                        # constante par map
+│   │   │   ├── map_id: 300 023
+│   │   │   ├── sample_rate_hz: 10
+│   │   │   └── record_version: 5
+│   │   │
 │   │   ├── /reperage
-│   │   │   ├── /sector_0
-│   │   │   │   ├── states      # shape: (N, S) — N frames, S features d'état
-│   │   │   │   ├── actions     # shape: (N, 3) — throttle, steer, brake
-│   │   │   │   ├── rewards     # shape: (N,)
-│   │   │   │   └── timestamps  # shape: (N,)
-│   │   │   ├── /sector_1
-│   │   │   │   └── ...
-│   │   │   └── /metadata
-│   │   │       └── sector_count: 12
-│   │   │       └── best_time: 95.3
-│   │   │       └── record_version: 5
+│   │   │   ├── /states
+│   │   │   │   ├── screenshots   # shape: (N, H, W, C), uint8, chunks: (1, H, W, C)
+│   │   │   │   ├── position      # shape: (N,3) — x, y, z, float32, chunks: (256,)
+│   │   │   │   ├── speed         # shape: (N,), float32, chunks: (256,)
+│   │   │   │   ├── gear          # shape: (N,), int8, chunks: (256,)
+│   │   │   │   └── rpm           # shape: (N,), float32, chunks: (256,)
+│   │   │   ├── actions           # shape: (N, 3) — throttle, steer, brake, float32, chunks: (256, 3)
+│   │   │   ├── frame_idx         # shape: (N,) — entier incrémental, détection de drops
+│   │   │   └── /run_metadata
+│   │   │       ├── config_id: "cfg_003"
+│   │   │       └── sector_time: 8.34
 │   │   │
 │   │   ├── /adaptation
 │   │   │   ├── /sector_0
-│   │   │   │   ├── states      # shape: (N, S)
-│   │   │   │   ├── actions     # shape: (N, 3)
-│   │   │   │   ├── rewards     # shape: (N,)
-│   │   │   │   ├── trajectory_cem_score  # float32 — score CEM de la trajectoire sélectionnée
-│   │   │   │   └── timestamps  # shape: (N,)
-│   │   │   ├── /sector_1
-│   │   │   │   └── ...
-│   │   │   └── /metadata
+│   │   │   │   ├── /trajectory_1
+│   │   │   │   │   ├── /states
+│   │   │   │   │   │   ├── screenshots
+│   │   │   │   │   │   ├── position
+│   │   │   │   │   │   ├── speed
+│   │   │   │   │   │   ├── gear
+│   │   │   │   │   │   └── rpm
+│   │   │   │   │   ├── actions               # shape: (N, 3)
+│   │   │   │   │   ├── frame_idx             # shape: (N,)
+│   │   │   │   │   ├── trajectory_cem_score  # float32
+│   │   │   │   │   └── /run_metadata
+│   │   │   │   │       └── config_id: "cfg_003"
+│   │   │   │   └── /trajectory_2
+│   │   │   │       └── ...
+│   │   │   └── /sector_1
+│   │   │       └── ...
 │   │   │
 │   │   ├── /imitation
 │   │   │   ├── /replay_0
-│   │   │   │   ├── states      # shape: (N, S) — screenshots compressées ou features extraites
-│   │   │   │   ├── actions     # shape: (N, 3)
-│   │   │   │   └── timestamps  # shape: (N,)
+│   │   │   │   ├── /states
+│   │   │   │   │   ├── screenshots
+│   │   │   │   │   ├── position
+│   │   │   │   │   ├── speed
+│   │   │   │   │   ├── gear
+│   │   │   │   │   └── rpm
+│   │   │   │   ├── actions          # shape: (N, 3)
+│   │   │   │   ├── frame_idx        # shape: (N,)
+│   │   │   │   └── /run_metadata
+│   │   │   │       ├── config_id: "cfg_003"
+│   │   │   │       └── success: True
 │   │   │   └── /replay_1
 │   │   │       └── ...
 │   │   │
-│   │   └── /records
-│   │       ├── /run_20260727_153422
-│   │       │   ├── states
+│   │   └── /Inference
+│   │       ├── /run_1
+│   │       │   ├── /states
+│   │       │   │   ├── screenshots
+│   │       │   │   ├── position
+│   │       │   │   ├── speed
+│   │       │   │   ├── gear
+│   │       │   │   └── rpm
 │   │       │   ├── actions
-│   │       │   ├── sector_times  # shape: (num_sectors,) — temps par secteur
-│   │       │   └── total_time: 95.3
-│   │       └── /run_20260727_160118
+│   │       │   ├── total_time: 95.3
+│   │       │   └── /run_metadata
+│   │       │       ├── config_id: "cfg_003"
+│   │       │       └── success: True
+│   │       └── /run_2
 │   │           └── ...
 │   │
-│   ├── /{map_id_2}
-│   │   └── ...
+│   └── /{map_id_2}
+│       └── ...
 │
 ├── /global_metadata
-│   ├── total_frames: 1500000
-│   ├── last_update: "2026-07-27T15:30:00"
-│   └── num_maps: 47
+│   ├── num_maps: 47
+│   │
+│   └── /configs                             # CONFIG DE GÉNÉRATION, référencée par config_id
+│       ├── /cfg_003
+│       │   ├── cem_iterations: 10
+│       │   ├── cem_candidates: 50
+│       │   └── model_version: 5
+│       └── /cfg_004
+│           └── ...
 │
 └── /checkpoints_index
-    ├── version_0: {map_id: 12, sector: 5, timestamp: ...}
-    ├── version_1: {map_id: 12, sector: 7, timestamp: ...}
+    ├── version_0: {map_id: 12, sector: 5, created_at: "2026-07-27T14:02:00"}
+    ├── version_1: {map_id: 12, sector: 7, created_at: "2026-07-27T14:18:00"}
     └── ...
 ```
 
-**Description des champs par dataset** :
+**Description des champs par dataset**
+
+**Données stockées à chaque instant `i` (groupe /state, reperage et adaptation) :**
+1. `screenshots[i]` — image `(H, W, C)`, `uint8`
+2. `speed[i]` — vitesse, `float32`
+3. `gear[i]` — rapport engagé, `int8`
+4. `rpm[i]` — régime moteur, `float32`
 
 | Champ | Type | Description |
 |-------|------|-------------|
-| `states` | float32, shape (N, S) | Vecteur d'état condensé (embedding voiture) ou raw features. S = nombre de features (vitesse, position, orientation, etc.). Compression gzip level 4. |
 | `actions` | float32, shape (N, 3) | Actions {throttle, steering, brake}. Normalisées dans [-1, 1]. |
-| `rewards` | float32, shape (N,) | Reward par frame (distance au checkpoint, vitesse, combinaison). |
-| `timestamps` | float64, shape (N,) | Timestamp Unix de chaque frame. |
-| `trajectory_cem_score` | float32 | Score CEM de la trajectoire qui a été sélectionnée pour ce secteur. Permet de filtrer les secteurs où la CEM a eu une bonne confiance. |
-| `sector_times` | float32, shape (S,) | Temps de parcours de chaque secteur dans une run. |
-| `total_time` | float32 | Temps total de la run. |
+| `frame_idx` | int64, shape (N,) | Compteur incrémental par frame. Ne date pas la frame, sert à détecter un drop (frame perdue par lag) : si `frame_idx[i+1] - frame_idx[i] ≠ 1`, il y a un trou à traiter avant l'entraînement. |
+| `trajectory_cem_score` | float32 | (adaptation uniquement) Score CEM de la trajectoire sélectionnée pour ce secteur. Permet de filtrer a posteriori les secteurs où le CEM avait une bonne confiance. |
+| `states` | float32, shape (N, S) | (groupes /imitation et /records) Vecteur d'état condensé (embedding voiture) ou raw features. S = nombre de features. Compression gzip level 4. |
+| `total_time` | float32 | (groupe /records uniquement) Temps total de la run. |
+
+Note : pas de champ `timestamps` — le `sample_rate_hz` fixe dans les métadonnées de la map permet de déduire le temps réel de la frame `i` par `i / sample_rate_hz`, ce qui rend le timestamp par frame redondant.
+
 
 **Chunks et compression** : chaque dataset est stocké par chunks de 256 ou 512 frames, avec compression gzip level 4. Cela permet une lecture/écriture incrémentale sans charger tout le fichier en mémoire.
 
 **Accès concurrent** : le fichier HDF5 est ouvert en mode append par le Game Interface Process et en mode lecture par le Training Process. h5py gère correctement l'accès concurrent (lecture/écriture simultanée sur des datasets différents ou sur des chunks différents). Un mécanisme de lock (fichier `.h5.lock`) empêche les écritures concurrentes sur le même dataset.
 
-### 5.3 Schéma des métadonnées par frame dans le HDF5
+**Les meta-data** : chaque map a un groupe `/metadata` qui contient des informations constantes (map_id, sample_rate_hz, record_version). Chaque run a un groupe `/run_metadata` qui contient des informations spécifiques à la run (config_id principalement qui informera de quel version du model a été utilisé, et d'autres information siu nécessaire).
 
-En plus des arrays principaux, chaque groupe de secteur contient un dataset de métadonnées :
 
-```python
-metadata = {
-    "map_id": np.string_("map_001"),        # identifiant de la map
-    "sector_id": 3,                          # numéro du secteur
-    "run_id": "run_20260727_153422",         # identifiant de la run
-    "origin_mode": np.string_("adaptation"), # mode d'origine
-    "cem_iterations": 10,                    # nombre d'itérations CEM utilisées
-    "cem_candidates": 50,                    # nombre de candidats par itération
-    "success": True,                         # True si le secteur a été parcouru sans respawn
-    "sector_time": 8.34,                     # temps en secondes pour parcourir le secteur
-    "collect_timestamp": 1722086462.0,       # timestamp de début de collecte
-    "model_version": 5,                      # version du modèle utilisé
-}
-```
 
 ---
 
@@ -607,13 +621,13 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 │          │   ZeroMQ          │   ZeroMQ          │               │
 │          └───────────────────┴───────────────────┘               │
 │                              │                                   │
-│                      ┌───────┴────────┐                         │
-│                      │  Process 4     │                         │
-│                      │  Training      │                         │
-│                      │                │                         │
-│                      │  - Backward    │                         │
-│                      │  - Checkpoint  │                         │
-│                      └────────────────┘                         │
+│                      ┌───────┴────────┐                          │
+│                      │  Process 4     │                          │
+│                      │  Training      │                          │
+│                      │                │                          │
+│                      │  - Backward    │                          │
+│                      │  - Checkpoint  │                          │
+│                      └────────────────┘                          │
 │                              │                                   │
 │                      Checkpoint files                            │
 │                      + HDF5 storage                              │
@@ -621,7 +635,7 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 Processus 1 — Game Interface Process
+### 6.2 Processus 1 — Game Interface Process (GIP)
 
 **Rôle** : faire l'interface entre le jeu (Trackmania 2020 via le plugin Openplanet) et le reste du système. C'est le seul processus qui communique directement avec le jeu.
 
@@ -644,11 +658,13 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 - Frames formatées écrites dans le MMAP
 - Logs vers le Control Center via ZeroMQ
 
-**Fréquence** : 50 Hz (correspond à la fréquence du game loop de Trackmania)
+**Fréquence** : 10Hz
+
+**Timestamps** : chaque frame de télémétrie est timestampée pour permettre la détection de drops et la synchronisation avec l'Inference Process. Ces timestamps ne seront pas enregistrer dans le dataset HDF5 final, mais servent uniquement à la détection de drops et à la synchronisation.
 
 **Contraintes temps réel** : ce processus doit tourner sans aucun drop. Une latence ou un drop dans la réception de la télémétrie se traduit directement par une perte de données. Un watchdog monitor (dans le Control Center) détecte si le flux de télémétrie s'interrompt.
 
-### 6.3 Processus 2 — Control Center Process
+### 6.3 Processus 2 — Control Center Process (CC)
 
 **Rôle** : orchestrer le système, gérer l'interface graphique, exposer les contrôles utilisateur, centraliser les statistiques.
 
@@ -671,14 +687,16 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 - Commandes de mode vers l'Inference Process et le Game Interface Process
 - Métriques affichées dans la GUI
 
-**Fréquence de mise à jour GUI** : 10 Hz (la GUI n'a pas besoin de 50 Hz ; 10 Hz est suffisant pour une expérience fluide)
+**Fréquence de mise à jour GUI** : 10 Hz 
 
 **Points clés** :
 - Le Control Center est le "chef d'orchestre" : il décide quand changer de mode, quand déclencher un entraînement, quand afficher une alerte.
 - Il reçoit les notifications de checkpoint readiness du Training Process et les转发 à l'Inference Process.
 - Le Mode Manager implémente la logique de transition entre modes (voir section 3.6 pour les règles de transition).
 
-### 6.4 Processus 3 — Inference Process
+**Sauvegarde des stats** : A sa fermeture, le Control Center sauvegarde toutes les statistiques collectées (dans un fichier JSON ?) pour analyse post-mortem.
+
+### 6.4 Processus 3 — Inference Process (INF)
 
 **Rôle** : exécuter le modèle de conduite en temps réel, prendre les décisions d'action à chaque frame, exécuter le module CEM en mode Adaptation.
 
@@ -686,13 +704,13 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 | Sous-composant | Technologie | Description |
 |----------------|-------------|-------------|
-| Forward Pass Engine | PyTorch | Exécute le modèle de conduite (inférence) à chaque frame |
-| Embedding Calculator | NumPy + PyTorch | Calcule l'embedding voiture (condensation du buffer MMAP) et l'embedding environnement |
+| Forward Pass Engine(à préciser) | PyTorch | Exécute le modèle de conduite (inférence) à chaque frame |
+| Embedding Calculator(à préciser) | NumPy + PyTorch | Calcule l'embedding voiture (condensation du buffer MMAP) et l'embedding environnement |
 | MMAP Reader | numpy + mmap | Lit les frames depuis le MMAP pour calculer les embeddings |
-| CEM Module | NumPy + Python | Implémente la cross-entropy method pour l'exploration de trajectoires (mode Adaptation) |
+| Adaptation Module | NumPy + Python | Implémente le mode adaptation |
 | Checkpoint Loader | PyTorch | Charge les checkpoints du modèle depuis le disque (watchdog event) |
 | Action Queue Writer | ZeroMQ PUSH | Écrit les actions dans la file d'actions vers le Game Interface Process |
-| Mode-specific Logic | Python | Applique la logique du mode actif (epsilon-greedy en Repérage, CEM en Adaptation, action pure en Inférence) |
+
 
 **Entrées** :
 - Frames de télémétrie depuis le MMAP
@@ -701,13 +719,12 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 **Sorties** :
 - Actions {throttle, steering, brake} vers le Game Interface Process (via ZeroMQ)
-- Statistiques (Q-value, reward estimé) vers le Control Center
+- Statistiques et infos (à déterminé précisement) vers le Control Center
 
-**Fréquence** : 50 Hz (synchrone avec le game loop)
+**Fréquence** : 10Hz
 
-**Contraintes temps réel** : l'inférence doit produire une action en moins de 5 ms (20% du temps de frame à 50 Hz) pour laisser du temps au Game Interface Process pour l'envoi au jeu.
 
-### 6.5 Processus 4 — Training Process
+### 6.5 Processus 4 — Training Process (TRN)
 
 **Rôle** : entraîner le modèle sur les données collectées, créer les checkpoints, gérer la versioning du modèle.
 
@@ -723,12 +740,12 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 **Entrées** :
 - Modèle actuel depuis le dernier checkpoint (chargé au démarrage)
-- Données depuis le HDF5 (ou directement depuis le MMAP pour les données fraîches)
+- Données depuis le HDF5
 
 **Sorties** :
 - Fichier checkpoint `model_v{n}.pt`
 - Fichier `version.txt` mis à jour
-- Notification de checkpoint readiness vers le Control Center
+- Les statistiques(loss, versions du model, temps de training, etc... à préciser) vers le Control Center
 
 **Fréquence** : déclenché par événements (fin d'un secteur pair en mode Adaptation, ou déclenché manuellement pour réentraînement sur données Imitation).
 
@@ -736,52 +753,37 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 ### 6.6 Schéma complet des canaux ZeroMQ
 
+A COMPLETER
+
 ```
                         ZeroMQ IPC Schema
-
-    ┌─────────────────────────────────────────────────────────────┐
-    │                                                             │
-    │  Game Interface ──PUSH──► [telemetry] ──SUB──► Inference   │
-    │     Process              (zmq.PUB)            Process       │
-    │                                                             │
-    │  Inference ──PUSH──► [action] ──PULL──► Game Interface     │
-    │     Process           (zmq.PAIR)             Process        │
-    │                                                             │
-    │  Control Center ◄──REP── [control] ──REQ──► GUI (internal) │
-    │                     (zmq.ROUTER)                           │
-    │                                                             │
-    │  Control Center ──PUB──► [mode] ──SUB──► Inference         │
-    │                     (zmq.PUB)               Process         │
-    │                              ──SUB──► Game Interface       │
-    │                                             Process         │
-    │                                                             │
-    │  Control Center ◄──PULL── [stats] ──PUSH──► Inference      │
-    │                     (zmq.SUB)              Process          │
-    │                              ──PUSH──► Training Process    │
-    │                                                             │
-    │  Training ──PUSH──► [checkpoint_ready] ──SUB──► Control   │
-    │   Process          (zmq.PUSH)               Center         │
-    │                                                             │
-    │  Control Center ──PUSH──► [checkpoint_signal] ──PULL──►   │
-    │                     (zmq.PUSH)               Inference      │
-    │                                             Process         │
-    │                                                             │
-    │  Filesystem:                                                 │
-    │    /tmp/ltm_telemetry.mmap  ←── MMAP shared par P1 et P3   │
-    │    /data/ltm_sequences.h5   ←── HDF5 écrit par P1, lu par P4│
-    │    checkpoints/model_v{n}.pt ←── Écrit par P4, lu par P3   │
-    │    version.txt               ←── Écrit par P4, lu par P3   │
-    │                                                             │
-    └─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│ GIP ──PUSH──► [telemetry] ──SUB──► INF        (PUB/SUB)       │
+│                                                               │
+│ INF ──PUSH──► [action] ──PULL──► GIP          (PUSH/PULL)     │
+│                                                               │
+│ CC  ──PUB──► [mode] ──SUB──► INF              (PUB/SUB)       │
+│                                                               │
+│ INF, TRN ──PUSH──► [stats] ──PULL──► CC       (PUSH/PULL)     │
+│                                                               │
+│ TRN ──PUSH──► [checkpoint_ready] ──PULL──► CC (PUSH/PULL)     │
+│                                                               │
+│ CC  ──PUSH──► [checkpoint_signal] ──PULL──► INF (PUSH/PULL)   │
+│                                                               │
+│ Filesystem:                                                   │
+│   /tmp/ltm_telemetry.mmap    ← MMAP partagé par GIP et P3     │
+│   /data/ltm_sequences.h5     ← HDF5 écrit par GIP, lu par TRN │
+│   checkpoints/model_v{n}.pt  ← écrit par TRN, lu par INF      │
+│   version.txt                ← écrit par TRN, lu par INF      │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### 6.7 Détail des files ZeroMQ
 
 | File | Type | Pattern | Fréquence | Source | Destinataires | Contenu |
 |------|------|---------|-----------|--------|---------------|---------|
-| `telemetry` | PUB/SUB | publish-subscribe | 50 Hz | Game Interface | Inference | `{frame_data, timestamp, sector_id}` |
-| `action` | PAIR | bidirectional | 50 Hz | Inference | Game Interface | `{throttle, steer, brake}` |
-| `control` | ROUTER/DEALER | client-server | événement | Control Center | tous | `{cmd: "mode_change", mode: "..."}` |
+| `telemetry` | PUB/SUB | publish-subscribe | 10 Hz | Game Interface | Inference | `{frame_data, timestamp, sector_id}` |
+| `action` | PAIR | bidirectional | 10 Hz | Inference | Game Interface | `{throttle, steer, brake}` |
 | `mode` | PUB/SUB | publish-subscribe | événement | Control Center | Inference, Game Interface | `{type: "mode_change", mode: "adaptation"}` |
 | `stats` | PUSH/PULL | pipeline | 1 Hz | Inference, Training | Control Center | `{loss, reward, q_value, sector_time}` |
 | `checkpoint_ready` | PUSH/PULL | pipeline | événement | Training | Control Center | `{version: n, path: "..."}` |
@@ -789,18 +791,17 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 ### 6.8 Format des messages ZeroMQ
 
-**Message Observation (télémétrie)** :
+**Telemetry** :
 ```json
 {
-    "type": "observation",
+    "type": "telemetry",
     "timestamp": 1722086462.034,
     "sector_id": 3,
     "map_id": "map_001",
     "speed": 45.2,
     "position": {"x": 100.5, "y": 200.3, "z": 5.0},
-    "orientation": {"w": 0.707, "x": 0.0, "y": 0.707, "z": 0.0},
     "steering": -0.12,
-    "throttle": 0.8,
+    "throttle": 1.0,
     "brake": 0.0,
     "rpm": 6500,
     "gear": 4,
@@ -808,7 +809,7 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 }
 ```
 
-**Message Action (commande de conduite)** :
+**Action** :
 ```json
 {
     "type": "action",
@@ -819,7 +820,7 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 }
 ```
 
-**Message Mode (changement de mode)** :
+**Mode** :
 ```json
 {
     "type": "mode_change",
@@ -833,7 +834,7 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 }
 ```
 
-**Message Checkpoint Ready** :
+**Checkpoint Ready / Chekpoint Signal** :
 ```json
 {
     "type": "checkpoint_ready",
@@ -844,7 +845,7 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 }
 ```
 
-**Message Statistiques** :
+**Stats** :
 ```json
 {
     "type": "stats",
@@ -861,9 +862,9 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 ---
 
-## 7. Pipeline d'entraînement
+## 7. Pipeline d'entraînement         A REFAIRE
 
-### 7.1 Vue d'ensemble
+### 7.1 Vue d'ensemble      
 
 Le pipeline d'entraînement combine des données issues de sources différentes, avec des objectifs d'apprentissage différents :
 
@@ -877,8 +878,8 @@ Le pipeline d'entraînement combine des données issues de sources différentes,
                     │  │             │  │   autonome)  │  │
                     │  └──────┬──────┘  └──────┬───────┘  │
                     │         │                │          │
-                    │    supervised         reinforcement│
-                    │      loss               learning   │
+                    │    supervised         reinforcement │
+                    │      loss               learning    │
                     │         │                │          │
                     │         ▼                ▼          │
                     │  ┌──────────────────────────────┐   │
@@ -940,7 +941,7 @@ En cas de manque de données (rare mais possible au début du projet), une hiér
 
 ---
 
-## 8. Gestion des checkpoints
+## 8. Gestion des checkpoints ----------------- OK
 
 ### 8.1 Principe d'atomicité
 
@@ -949,40 +950,41 @@ Le checkpoint est le fichier qui contient les poids du modèle à un instant don
 1. **L'Inference Process ne charge jamais un fichier corrompu** : si le Training Process crash pendant l'écriture du checkpoint, le fichier résultat ne doit pas être un mélange de l'ancien et du nouveau modèle.
 2. **Le modèle chargé par l'Inference Process est toujours le dernier modèle complet** : pas de version intermédiaire, pas de fichier incomplet.
 
+
 ### 8.2 Cycle complet de création d'un checkpoint
 
 ```
 Training Process                                     Inference Process
       │                                                    │
       │  1. Training loop terminé                          │
-      │     (gradients stabilisés, loss acceptable)        │
+      │                                                    │
       │                                                    │
       ▼                                                    │
       │  2. torch.save(model.state_dict(),                 │
-      │     "checkpoints/model_v{n+1}.pt.tmp")            │
+      │     "checkpoints/model_v{n+1}.pt.tmp")             │
       │     (écriture dans fichier .tmp — NON atomique)    │
       │                                                    │
       ▼                                                    │
       │  3. Écrire fichier lock :                          │
-      │     "checkpoints/model_v{n+1}.lock"               │
+      │     "checkpoints/model_v{n+1}.lock"                │
       │     (indique que l'écriture est en cours)          │
       │                                                    │
       ▼                                                    │
-      │  4. os.rename() atomique :                        │
-      │     model_v{n+1}.pt.tmp → model_v{n+1}.pt        │
-      │     (atomique sur tous les systèmes de fichiers)   │
+      │  4. os.rename() atomique :                         │
+      │     model_v{n+1}.pt.tmp → model_v{n+1}.pt          │
+      │     (atomique)                                     │
       │                                                    │
       ▼                                                    │
       │  5. Supprimer le fichier lock                      │
       │     (le fichier .pt est maintenant complet)        │
       │                                                    │
       ▼                                                    │
-      │  6. Écrire version.txt = "{n+1}\n"               │
+      │  6. Écrire version.txt = "{n+1}\n"                 │ 
       │     (indique le numéro de version courante)        │
       │                                                    │
       │  7. Envoyer message checkpoint_ready               │
       │     via ZeroMQ checkpoint_queue                    │
-      │ ─────────────────────────────────────────────►    │
+      │ ─────────────────────────────────────────────►     │
       │                                                    │
       │                                          8. Control Center reçoit le message
       │                                                    │
@@ -996,17 +998,7 @@ Training Process                                     Inference Process
       │                                              - Continue avec le nouveau modèle
 ```
 
-### 8.3 Résumé du cycle de 20 secondes
-
-| Étape | Temps approximatif | Détail |
-|-------|--------------------|--------|
-| Fin de l'entraînement (gradients + optimizer step) | ~15-18s | Dépend de la taille du batch et du modèle |
-| Écriture du fichier .tmp | ~0.5-1s | Dépend de la taille du modèle (quelques Mo) |
-| os.rename() atomique | <1ms | Opération instantanée |
-| Mise à jour de version.txt | <1ms | Écriture d'un entier dans un fichier texte |
-| Notification Control Center | <1ms | Message ZeroMQ |
-| Rechargement par Inference Process | ~0.1-0.5s | Chargement du fichier .pt en mémoire |
-| Reprise de l'inférence | — | Le nouveau modèle est utilisé à partir de la frame suivante |
+**ATENTION** : La nouveau modèle n'est chargé et utiliser que entre deux runs(que ce soit pour l'imitation ou l'inférence) ou entre deux secteurs. 
 
 ### 8.4 Structure des fichiers de checkpoint
 
@@ -1028,7 +1020,7 @@ L'Inference Process lit toujours `version.txt`, puis charge `checkpoints/model_v
 
 - Les checkpoints sont conservés pendant les 10 dernières versions (à définir).
 - Les anciens checkpoints sont supprimés pour libérer de l'espace disque.
-- Le checkpoint "best" (celui qui a donné le meilleur temps sur une map connue) est conservé indéfiniment dans un sous-dossier `checkpoints/best/`.
+- Le checkpoint "best" (celui qui a donné le meilleur temps sur une map connue) est conservé indéfiniment dans un sous-dossier à préciser.
 
 ---
 
@@ -1038,7 +1030,7 @@ L'Inference Process lit toujours `version.txt`, puis charge `checkpoints/model_v
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  LTM-AI Control Center v2.0                              [—] [□] [✕]    │
+│  LTM-AI Control Center                                   [—] [□] [✕]    │
 ├─────────────────────────────────┬────────────────────────────────────────┤
 │                                 │                                        │
 │  ┌─────────────────────────┐   │  ┌──────────────────────────────────┐  │
@@ -1077,6 +1069,10 @@ L'Inference Process lit toujours `version.txt`, puis charge `checkpoints/model_v
 │  │  cem_candidates:  50    │   │  └──────────────────────────────────┘  │
 │  │  batch_size:      64    │   │                                        │
 │  │  learning_rate: 0.
+
+
+```
+
 ### 9.2 Fonctionnalités confirmées DearPyGUI + ImPlot
 
 | Fonctionnalité | Statut | Note |
@@ -1155,45 +1151,40 @@ ipc:
 # Fréquences
 # =============================================================================
 frequencies:
-  game_loop_hz: 50           # 20ms par cycle — fréquence du game loop Trackmania
-  inference_hz: 50           #同步同上
+  game_loop_hz: 10           # Fréquence de la boucle principale du jeu (plugin Openplanet)
+  inference_hz: 10           # Fréquence de l'Inference Process
   gui_update_hz: 10          # La GUI n'a pas besoin de 50 Hz
-  stats_report_hz: 1         # Rapports de stats toutes les secondes
-  mmap_flush_interval_s: 5   # Flush du MMAP vers HDF5 toutes les 5 secondes
+  stats_report_hz: 2         # Rapports de stats toutes les secondes ou 0.5s
+
+
 
 # =============================================================================
-# Embeddings — Architecture
+# Model Configuration
+# =============================================================================
+model:
+  #A définir
+
+
+
+# =============================================================================
+# Embeddings Configuration
 # =============================================================================
 embeddings:
-  car:
-    dimension: 128           # À DEFINIR : dimension de l'embedding voiture (64-256)
-    window_frames: 50        # 1 seconde de buffer @ 50Hz — CONDENSATION TEMPORELLE
-    condensation_method: "gru"  # "statistical" | "gru" | "lstm" | "concat" — À DEFINIR
-    # Si statistical :
-    statistical_features: ["mean", "std", "min", "max", "slope"]
-    # Si concat :
-    # concat_frames: 10  # concaténer les 10 dernières frames directement
-  
-  environment:
-    dimension: 256           # À DEFINIR : dimension de l'embedding environnement (128-512)
-    update_frequency: "sector"  # "frame" | "sector" — À DÉFINIR
-    # Point non tranché : embedding partagé entre secteurs ou propre à chaque secteur ?
-    # embedding_mode: "shared"  # "shared" | "per_sector" — À DÉFINIR
-  
-  concat_dim: 384            # car(128) + env(256) = 384 — mis à jour quand les deux sont définis
+  # A definir
+
 
 # =============================================================================
-# MMAP Configuration — Buffer temps réel
+# MMAP Configuration
 # =============================================================================
 mmap:
   path: "/tmp/ltm_telemetry.mmap"
-  buffer_frames: 100         # 2 secondes @ 50Hz — taille du buffer circulaire
-  frame_size_bytes: 64       # Taille d'une frame en bytes (aligné pour performance)
-  fields_per_frame: 16       # Nombre de champs par frame
-  # Champs : timestamp, speed, pos_x/y/z, quat_w/x/y/z, steer, throttle, brake, rpm, gear, sector_id, map_id, mode
+  buffer_frames: 20         # 2 à 10Hz
+  frame_size_bytes: ?
+  fields_per_frame: 9
+  # Champs : timestamp, screenshot, speed, position(x,y,z), steering, throttle, brake, gear
 
 # =============================================================================
-# HDF5 Configuration — Stockage permanent
+# HDF5 Configuration
 # =============================================================================
 hdf5:
   path: "/data/ltm/sequences.h5"
@@ -1203,113 +1194,64 @@ hdf5:
   max_frames_per_file: 5000000  # Limite soft pour éviter les fichiers trop gros
   lock_file: "/data/ltm/sequences.h5.lock"
 
-# =============================================================================
-# Cross-Entropy Method (CEM) — Mode Adaptation
-# =============================================================================
-cem:
-  candidates_per_iteration: 50   # À DEFINIR : nombre de trajectoires candidates N
-  top_k_fraction: 0.1            # Fraction des meilleures candidates gardées (K = N * fraction)
-  iterations: 10                 # À DEFINIR : nombre d'itérations de la CEM
-  initial_std: 0.5               # Écart-type initial de la distribution gaussienne (sur les paramètres de trajectoire)
-  std_decay: 0.95                # Décroissance de l'écart-type par itération
-  reward_metric: "sector_time"   # "sector_time" | "speed_avg" | "composite" — À DÉFINIR
+
 
 # =============================================================================
-# Mode Adaptation — Paramètres
+# Mode Adaptation
 # =============================================================================
 adaptation:
   training_interval_sectors: 2  # Mise à jour des poids tous les 2 secteurs (PAS à chaque secteur)
   epsilon_actions: 0.05         # À DEFINIR : probabilité d'action aléatoire par frame
   epsilon_goal: 0.10            # À DEFINIR : probabilité de sélectionner une trajectoire aléatoire
-  min_sectors_for_training: 3   # Nombre minimum de secteurs collectés avant premier entraînement
-  respawn_strategy: "restart"   # "restart" | "fallback" | "mark_failed" — À DÉFINIR
+  num_sectors_bf_model_checkpoint: 4  # Nombre de secteurs avant de changer de checkpopint(si possible)
+  mode_automatique: true            # Selection manuel de la meilleur trajectoire si false, 
+                                    # sinon selection automatique de la meilleur trajectoire
 
 # =============================================================================
-# Mode Repérage — Paramètres
+# Mode Repérage
 # =============================================================================
 reperage:
-  epsilon: 1.0                  # Exploration maximale (actions quasi-aléatoires)
-  collect_enabled: true
-  training_enabled: false
-  max_sectors_before_switch: 12 # Passer en Adaptation après X secteurs — À DÉFINIR
+  #A voir
 
 # =============================================================================
-# Mode Imitation — Paramètres
+# Mode Imitation
 # =============================================================================
 imitation:
-  collect_enabled: true
   training_enabled: true
-  replay_files_dir: "/data/ltm/human_replays/"  # Dossier contenant les datasets de replay humain
-  reduced_info_mode: false    # À DEFINIR : utiliser les barres visuelles au lieu du texte pour l'OCR
+  replay_files_dir: ""  # Dossier contenant les datasets de replay humain( présent dans le HDF5)
   ocr_confidence_threshold: 0.8  # Seuil de confiance OCR en dessous duquel la frame est supprimée
   capture_fps: 30             # Images capturées par seconde depuis le replay — À DÉFINIR
 
 # =============================================================================
-# Mode Inférence — Paramètres
+# Mode Inférence
 # =============================================================================
 inference:
-  collect_enabled: false
-  training_enabled: false
-  model_eval_mode: true       # dropout off, batchnorm eval
+  collect_enabled: true
+  training_enabled: true
 
 # =============================================================================
-# Mode Record Replay — Paramètres
+# Mode Record Replay
 # =============================================================================
 record_replay:
   collect_enabled: true
-  record_on_improvement: true  # Ne conserver que les runs qui battent le record
-  records_dir: "/data/ltm/records/"
-  max_records_per_map: 10     # Nombre maximum de records conservés par map
+  directory: "/data/ltm/records/"
+  max_records_per_map: 5     # Nombre maximum de records conservés par map
 
 # =============================================================================
 # Training Configuration
 # =============================================================================
 training:
-  batch_size: 64              # Taille du batch (compromis GPU vs vitesse)
-  optimizer:
-    type: "Adam"              # "Adam" | "AdamW" | "SGD"
-    lr: 0.0003                # Taux d'apprentissage — VALIDÉ dans le contexte, à confirmer par expérience
-    weight_decay: 0.0001      # L2 regularization
-  gradient_clip: 1.0          # Clip des gradients pour stabilité
-  scheduler:
-    type: " ReduceLROnPlateau"  # "step" | "cosine" | "ReduceLROnPlateau" — À DÉFINIR
-    patience: 5               # Époques sans amélioration avant réduction du LR
-    factor: 0.5               # Facteur de réduction du LR
-  
-  # Mix des sources de données
-  imitation_weight: 0.5       # β — proportion de données Imitation dans le batch — À DÉFINIR
-  adaptation_weight: 0.5      # 1 - β — proportion de données Adaptation
-  
-  # Data augmentation
-  noise_std: 0.01             # Bruit gaussien ajouté aux states pendant l'entraînement — À DÉFINIR
-  shuffle: true
-  num_workers: 4              # Workers pour le DataLoader
-
-# =============================================================================
-# Model Configuration
-# =============================================================================
-model:
-  input_dim: 384              # concat_dim des embeddings (mise à jour quand embeddings sont définis)
-  hidden_layers: [256, 128, 64]  # Tailles des couches cachées — VALIDÉ (point de départ)
-  activation: "relu"          # "relu" | "gelu" | "silu"
-  output_action_dim: 3        # {throttle, steering, brake}
-  output_reward_dim: 1        # Optionnel : prédiction du reward
-  
-  # Architecture alternative à explorer (pas encore validé)
-  # architecture: "mlp"        # "mlp" | "gru" | "transformer" — À DÉFINIR
-  # if gru:
-  #   gru_layers: 2
-  #   gru_dropout: 0.1
+  #A définir
 
 # =============================================================================
 # Checkpoint Configuration
 # =============================================================================
 checkpoints:
-  directory: "/data/ltm/checkpoints/"
+  directory: ""
   keep_last_n: 10             # Nombre de checkpoints à conserver
   save_best: true             # Sauvegarder le meilleur checkpoint par map
-  save_interval_sectors: 4    # Sauvegarder un checkpoint tous les X secteurs (safety net)
-  best_dir: "/data/ltm/checkpoints/best/"
+  save_interval_sectors: 4    # Sauvegarder un checkpoint tous les X secteurs (pour l'adaptation)
+  best_dir: ""
 
 # =============================================================================
 # Game Interface Configuration
@@ -1317,7 +1259,6 @@ checkpoints:
 game_interface:
   plugin_address: "localhost:5550"  # Adresse du plugin Openplanet (écoute)
   action_port: 5551                  # Port pour envoyer les actions au plugin
-  telemetry_timeout_s: 2.0           # Timeout avant de déclarer le plugin absent
   respawn_on_stuck: true             # Auto-respawn si pas de progression pendant X secondes
 
 # =============================================================================
@@ -1331,183 +1272,14 @@ gui:
   trajectory_points_max: 500  # Nombre max de points affichés pour la trajectoire (performance)
   log_panel_lines: 200       # Nombre de lignes conservées dans le panneau de log
 
+
 # =============================================================================
 # Modes de jeu — Config par défaut
 # =============================================================================
 modes:
   default_mode: "reperage"   # Mode au démarrage du système
-  auto_switch_enabled: true  # Permettre le changement de mode automatique (Repérage → Adaptation)
-  switch_threshold_sectors: 0.8  # % du circuit à parcourir avant switch auto — À DÉFINIR
+  auto_switch_enabled: true  # Permettre le changement de mode automatique (A définir quand)
 ```
-
----
-
-## 11. Points ouverts — Décisions à trancher avant implémentation
-
-### 11.1 Embeddings et architecture du modèle
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| Dimension de l'embedding voiture | 64 / 128 / 256 | Capacité du modèle à représenter la dynamique | HAUTE |
-| Dimension de l'embedding environnement | 128 / 256 / 512 | Capacité à représenter des circuits longs | HAUTE |
-| Méthode de condensation temporelle | statistical / GRU / LSTM / concat | Compromis performance/complexité | HAUTE |
-| Architecture du réseau | MLP / GRU / Transformer | Capacité de modélisation séquentielle | MOYENNE |
-| Fréquence de recalibrage des embeddings | frame / secteur | Coût computationnel vs réactivité | MOYENNE |
-| Embedding environnement : partagé ou par secteur ? | shared / per_sector | Capacité de planification à long terme | HAUTE |
-
-### 11.2 Cross-Entropy Method
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| Nombre de candidats N | 20 / 50 / 100 | Qualité vs coût de calcul | HAUTE |
-| Nombre d'itérations CEM | 5 / 10 / 20 | Convergence vs temps d'exploration | HAUTE |
-| Fraction des meilleures candidates (K/N) | 5% / 10% / 20% | Exploration vs exploitation | MOYENNE |
-| Écart-type initial de la distribution | 0.1 / 0.5 / 1.0 | Exploration initiale | MOYENNE |
-| Métrique de reward pour la CEM | sector_time / speed / composite | Ce qu'on optimise réellement | HAUTE |
-
-### 11.3 Mode Adaptation
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| epsilon_actions | 0.01 / 0.05 / 0.1 | Exploitation vs exploration frame-level | HAUTE |
-| epsilon_goal | 0.05 / 0.1 / 0.2 | Exploitation vs exploration au niveau trajectoire | HAUTE |
-| Stratégie en cas de respawn | restart / fallback / mark_failed | Temps de convergence | MOYENNE |
-| Fréquence de mise à jour des poids | tous les 1 / 2 / 3 secteurs | Stabilité vs réactivité | HAUTE |
-
-### 11.4 Pipeline Imitation (programme "crédule")
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| Mode reduced_info (barres vs OCR) | true / false | Fiabilité de la reconnaissance | HAUTE |
-| FPS de capture des screenshots | 10 / 30 / 60 | Qualité de la synchronisation | MOYENNE |
-| Méthode d'extraction des inputs | OCR / lecture pixel / lecture mémoire | Fiabilité et performance | HAUTE |
-| Seuil de confiance OCR minimal | 0.7 / 0.8 / 0.9 | Qualité des données vs quantité | MOYENNE |
-
-### 11.5 Entraînement
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| Learning rate | 0.001 / 0.0003 / 0.0001 | Vitesse de convergence | HAUTE |
-| Proportion Imitation vs Adaptation (β) | 0.3 / 0.5 / 0.7 | Compromis qualité de base vs affinage | MOYENNE |
-| Scheduler du LR | step / cosine / ReduceLROnPlateau | Stabilité à long terme | MOYENNE |
-| Data augmentation (bruit) | 0.0 / 0.01 / 0.05 | Généralisation | BASSE |
-
-### 11.6 Infrastructure et performance
-
-| Question | Options | Impact | Priorité |
-|----------|---------|--------|----------|
-| Taille du buffer MMAP | 100 / 500 / 1000 frames | Mémoire vs temps de stockage | MOYENNE |
-| Intervalle de flush MMAP → HDF5 | 5s / 10s / par secteur | Perte de données vs overhead | MOYENNE |
-| Nombre de checkpoints conservés | 5 / 10 / 20 | Espace disque vs sécurité | BASSE |
-
----
-
-## 12. Risques et limites techniques
-
-### 12.1 Viabilité du programme "crédule" (synchronisation frame/input)
-
-**Risque : élevé**
-
-Le pipeline Imitation repose sur un programme ("crédule") qui capture des screenshots pendant un replay, extrait les valeurs d'inputs affichées par le plugin Openplanet via OCR ou lecture visuelle, et les associe aux frames correspondantes.
-
-**Problèmes identifiés :**
-
-1. **Fiabilité de l'OCR** : la reconnaissance de caractères à partir de texte affiché par le plugin est sujette à erreur, surtout si le texte est petit, flou (movement blur pendant le replay), ou si la police est non standard. Un taux d'erreur de 5% sur les inputs peut corrompre significativement le dataset d'entraînement.
-
-2. **Synchronisation temporelle** : capturer des screenshots pendant un replay implique de maintenir une synchronisation entre le timestamp du screenshot et le timestamp de l'input correspondant. Si le replay n'est pas capturé à 50 Hz constant (par exemple si le framerate du jeu fluctuе), la synchronisation peut être décalée, entrainant un mismatch entre la frame et l'input labelisé.
-
-3. **Variabilité de l'affichage plugin** : si le plugin Openplanet change la disposition ou le format de ses affichages debug (ajout d'un label, changement de couleur, déplacement de la position à l'écran), le programme crédule peut échouer à lire les valeurs sans mise à jour du code.
-
-**Mitigations possibles :**
-
-- Utiliser le mode "reduced info" (barres visuelles) au lieu de l'OCR, avec lecture de pixel pour déterminer la valeur (plus robuste qu'un OCR complet).
-- Implémenter un mode de calibration du programme crédule : avant de capturer un replay, capturer quelques frames avec des valeurs connues et vérifier que le programme lit correctement.
-- Stocker la version du plugin utilisée dans les métadonnées du dataset, et détecte les incompatibilités.
-
-**Recommandation** : tester le pipeline crédule sur au moins 10 replays de qualité variée avant de le valider comme source de données principale. Si le taux d'erreur dépasse 2%, repenser l'approche.
-
-### 12.2 Coût de recalibrage continu des embeddings
-
-**Risque : moyen**
-
-Le recalibrage des embeddings (voiture à chaque frame, environnement à chaque secteur) implique un coût computationnel additionnel à chaque step de la boucle d'inférence. Ce coût peut être négligeable si les embeddings sont petits et le recalcul est simple (statistiques sur une fenêtre), mais il peut devenir significatif si l'on utilise un GRU/LSTM pour la condensation temporelle.
-
-**Mitigation** : si le temps d'inférence dépasse 5 ms par frame (soit 25% du budget temps réel de 20 ms), il faudra :
-- Optimiser le code de recalcul (vectorisation NumPy, pré-allocation mémoire).
-- Réduire la fréquence de recalibrage (passer de frame-level à secteur-level pour l'embedding environnement).
-- Utiliser un modèle d'embedding plus simple (condensation statistique au lieu de RNN).
-
-### 12.3 Divergence du modèle en mode Adaptation
-
-**Risque : moyen**
-
-En mode Adaptation, le modèle s'entraîne en continu sur des données qu'il génère lui-même (auto-supervision). Ce type d'entraînement peut mener à une divergence du modèle si les données collectées contiennent des biais systématiques (par exemple, le modèle apprend à prendre toujours le même virage de manière sous-optimale, et ses propres actions reinforces ce pattern).
-
-**Symptômes** : temps au tour qui se dégradent progressivement au fil des itérations, trajectoires de plus en plus similaires entre elles (manque de diversité), loss qui ne diminue pas ou qui augmente.
-
-**Mitigations** :
-
-- Limiter le nombre de sectors sur lesquels le modèle s'entraîne avant de repasser en mode Inférence pour benchmarking.
-- Surveiller la diversité des trajectoires (variance des actions, variance des temps de sector). Si la variance chute en dessous d'un seuil, déclencher une réinitialisation de la distribution CEM (repart avec un std plus grand).
-- Mélanger les données Adaptation avec des données Imitation pour éviter le collapse complet vers un seul pattern.
-
-### 12.4 Fragilité du pipeline multi-processus
-
-**Risque : faible à moyen**
-
-Le système repose sur 4 processus qui communiquent via ZeroMQ. Si un processus meurt (crash, exception non gérée), le système peut se retrouver dans un état incoherent :
-- Le Game Interface Process meurt → plus de télémétrie → l'Inference Process continue de produire des actions basées sur le dernier état connu.
-- L'Inference Process meurt → plus d'actions → la voiture continue sur sa trajectoire précédente (inerte) jusqu'au respawn automatique.
-
-**Mitigations** :
-
-- Chaque processus implémente un watchdog qui détecte l'absence de messages depuis un certain temps et relance le processus ou notifie l'opérateur.
-- Le Control Center centralise la supervision et peut forcer un mode sans risque (Inférence avec dernier modèle connu) en cas de défaillance d'un processus.
-- Des logs exhaustifs permettent de reconstruire l'état du système après un crash.
-
-### 12.5 Latence de la boucle de contrôle
-
-**Risque : faible**
-
-À 50 Hz, chaque frame dure 20 ms. Si l'inférence prend plus de 5 ms, il reste 15 ms pour l'envoi de l'action au plugin et la réception de la télémétrie. Sur un réseau local (localhost), ZeroMQ a une latence de l'ordre de la microseconde, donc le goulot d'étranglement est le temps de calcul du modèle.
-
-**Mitigation** : mesurer le temps d'inférence en production (profilage) et s'assurer qu'il reste en dessous de 5 ms. Si le modèle est trop lourd, réduire sa taille ou utiliser l'inférence enFP16 (half-precision) sur GPU.
-
-### 12.6 Compatibilité avec les futures versions de Trackmania
-
-**Risque : long terme**
-
-Le plugin Openplanet et le protocole de communication dépendent de la version du jeu. Si Ubisoft/Nadeo publie une mise à jour de Trackmania 2020 qui change l'API interne ou le format des replays, le plugin peut cesser de fonctionner et le système entier sera paralysé.
-
-**Mitigation** : maintenir une veille sur les mises à jour du jeu et du plugin Openplanet. Versionner le plugin utilisé et documenter les incompatibilités connues.
-
----
-
-## 13. Glossaire
-
-| Terme | Définition |
-|-------|------------|
-| **Embedding** | Représentation vectorielle dense d'une information (état de la voiture, contexte du circuit) dans un espace de dimension réduite. |
-| **Condensation temporelle** | Extraction d'un vecteur de dimension fixe à partir d'une séquence de frames, permettant de capturer l'information historique sans exploser la dimension d'entrée. |
-| **MMAP (Memory-mapped file)** | Technique qui permet d'accéder à un fichier sur le disque comme s'il était en mémoire vive, offrant les avantages de la persistance sans le coût d'une copie. |
-| **HDF5** | Format de fichier hiérarchique pour le stockage de données scientifiques, 支持ant la compression, les datasets de grande taille, et l'accès par chunks. |
-| **ZeroMQ** | Bibliothèque de messaging asynchrone supporter différents patterns de communication (PUB/SUB, PUSH/PULL, PAIR, ROUTER). |
-| **Cross-Entropy Method (CEM)** | Algorithme d'optimisation stochastique qui utilise une distribution de probabilité (typiquement gaussienne) pour générer et évaluer des candidats, en affinant la distribution à chaque itération vers les meilleures solutions. |
-| **Checkpoint** | Sauvegarde des poids d'un modèle de neural network à un instant donné, permettant de reprendre l'entraînement ou de charger une version spécifique du modèle. |
-| **Sector** | Segment d'un circuit délimité par deux checkpoints consécutifs. L'agent apprend à optimiser sa trajectoire secteur par secteur. |
-| **Embedding partagé (shared)** | L'embedding environnement est un vecteur unique qui est mis à jour au fur et à mesure de la progression dans le circuit, conservant l'historique de tous les secteurs traversés. |
-| **Embedding par secteur (per_sector)** | Chaque secteur a son propre embedding, et le modèle n'a accès qu'à l'embedding du secteur courant. |
-| **CEM candidates** | Nombre de trajectoires candidates générées et évaluées à chaque itération de la CEM. |
-| **epsilon_actions** | Probabilité d'effectuer une action aléatoire au lieu de l'action prédite par le modèle, pour favoriser l'exploration au niveau frame. |
-| **epsilon_goal** | Probabilité de sélectionner une trajectoire aléatoire au lieu de la trajectoire sélectionnée par la CEM, pour éviter les optima locaux au niveau de la trajectoire. |
-| **Mode Repérage** | Mode où l'agent explore un circuit inconnu avec un comportement largement aléatoire, sans apprentissage, pour collecter des données de télémétrie. |
-| **Mode Imitation** | Mode où l'agent apprend à partir de replays humains, en construisant un dataset (frame, input) synchronisé via le pipeline "crédule". |
-| **Mode Adaptation** | Mode où l'agent explore des trajectoires via la CEM, sélectionne la meilleure à chaque secteur, et met à jour ses poids tous les 2 secteurs. |
-| **Mode Inférence** | Mode "jeu pur" où le modèle exécute sans apprentissage ni collecte de données. |
-| **Record Replay** | Mode Inférence où les données de la run sont persistées pour archive et comparaison. |
-| **Programme "crédule"** | Programme de synchronisation frame/input pour le pipeline Imitation, qui analyse les screenshots et extrait les inputs affichés par le plugin. |
-| **Reduced info mode** | Variant du pipeline Imitation où les inputs sont affichés sous forme de barres visuelles plutôt que de texte, pour faciliter la lecture par analyse d'image. |
-| **Respawn** | Réapparition de la voiture après une sortie de route ou un accident, típiquement à un checkpoint récent. |
 
 ---
 
