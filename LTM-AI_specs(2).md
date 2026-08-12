@@ -68,27 +68,15 @@ LTM-AI (Latent Trackmania AI) est un projet visant à construire un agent d'inte
 
 ---
 
-## 2. Architecture générale du modèle
+## 2. Architecture générale du modèle ------------------ A vérifier avec le carnet
 
-### 2.1 Philosophie : pourquoi un espace latent ?
+### 2.1 Les deux embeddings distincts
 
-La manière naive d'aborder le problème serait de donner au modèle une image brute du jeu (résolution écran, soit des millions de valeurs par frame) et de l'entraîner à prédire les bons inputs. Cette approche pose plusieurs problèmes concrets :
-
-1. **Coût computationnel prohibitif** : un modèle qui traite des images brutes à 10 Hz nécessite des architectures lourdes (CNN profondes), avec un temps d'inférence incompatible avec la boucle de jeu temps réel sur du matériel domestique.
-
-2. **Redondance de l'information** : une screenshot de Trackmania contient énormément d'informations visuelles non pertinentes pour la conduite (publicités bords de piste, spectateurs, effets visuels). L'essentiel de ce qui compte pour la conduite se réduit à un ensemble limité de features : vitesse, accélération, orientation, position sur la route, distance au checkpoint suivant.
-
-3. **Difficulté d'apprentissage** : un modèle qui doit apprendre à "voir" un circuit depuis des pixels bruts passe une grande partie de sa capacité à reconstruire l'information visuelle au lieu de raisonner sur la dynamique de conduite.
-
-**L'approche par embeddings latents** résout ces trois problèmes en faisant précéder le modèle d'un étage de condensation qui extrait, à partir de la télémétrie brute du jeu (fournie nativement par le plugin Openplanet), un vecteur de dimension fixe et de semantics denses. Le modèle de conduite ne voit jamais les pixels : il ne voit qu'un vecteur de 128 ou 256 valeurs flottantes qui décrit exhaustivement la situation courante.
-
-### 2.2 Les deux embeddings distincts
-
-Le modèle fonctionne avec **deux embeddings distincts** qui ne doivent pas être confondus :
+Le modèle fonctionne avec **deux embeddings distincts** principaux qui ne doivent pas être confondus :
 
 #### 2.2.1 Embedding "voiture" (Car Embedding)
 
-**Rôle** : décrire l'état courant de la voiture, c'est-à-dire sa dynamique instantanée et son histoire récente.
+**Rôle** : décrire la dynamique de la voiture récente, c'est-à-dire l'état actuel compte tenu de son histoire récente. C'est une représentation vectorielle de la trajectoire suivie par le voiture sur les dernières frames.
 
 **Pourquoi un condensé temporel et pas un état instantané ?**
 
@@ -96,170 +84,186 @@ Un état instantané (position, vitesse, orientation à l'instant t) est insuffi
 
 - **La physique du véhicule est inertielle** : à 200 km/h, la voiture ne peut pas changer de direction instantanément. Un état instantané de position/orientation ne dit rien de la trajectoire récente ni de la courbure du virage upcoming. Le modèle a besoin de "voir" que la voiture est en train de freiner fort, ce qui se déduit d'une sequence de valeurs de vitesse décroissante sur les derniers instants, pas d'une seule valeur à t.
 
-- **La conduite est un problème de contrôle continu** : les inputs (steering, throttle, brake) ont un effet différé et cumulatif. Un modèle qui ne voit qu'un état instantané ne peut pas inférer l'effet de ses propres actions précédentes. En lui donnant un historique condensé (les N dernières secondes), on lui donne le contexte nécessaire pour comprendre le "flow" de la conduite.
+- **La conduite est un problème de contrôle continu** : les inputs (steering, throttle, brake) ont un effet différé et cumulatif. Un modèle qui ne voit qu'un état instantané ne peut pas inférer l'effet de ses propres actions précédentes. En lui donnant un historique condensé (les N dernières) frames, le modèle peut apprendre à anticiper les effets de ses actions, généraliser les situations et à planifier en conséquence.
 
-- **Stabilité du contrôle** : un modèle qui réagit à un état instantané peut produire des sorties erratiques d'une frame à l'autre. Un modèle qui voit un condensé temporel (par exemple une moyenne pondérée des dernières secondes) produit des sorties plus lisses et cohérentes.
 
-**Contenu du buffer de condensation** : à chaque frame, le plugin in-game fournit la télémétrie complète. Le Game Interface Process maintient un **buffer circulaire** des N dernières frames (où N correspond à environ 1 seconde, soit 50 frames à 50 Hz). Ce buffer est recalibré en continu via le processus décrit en section 2.2.3.
+#### 2.1.2 Embedding "environnement" (Map Embedding)
 
-**Calcul de l'embedding voiture** : à partir du buffer de N frames, on extrait un vecteur condensé via une méthode à définir (par exemple : statistiques sur la fenêtre glissante — moyenne, variance, min, max, pente linéaire — sur chaque feature ; ou réseau de condensation légergenre un petit GRU ou LSTM ; ou simplement les N dernières valeurs concaténées si N est petit). La dimension de cet embedding est **à définir** (entre 64 et 256 selon la méthode retenue).
+**Rôle** : décrire le contexte du circuit sur lequel la voiture roule.
 
-L'embedding voiture est **réinitialisé à chaque nouvelle run** (nouveau départ), car il n'a pas de sens d'avoir un historique de conduite d'une run précédente dans la nouvelle run.
+**Problème fondamental** : Quand un humain joue a Trakmania, sur chaque map il sait au bout de quelques temps quel virage va venir après, et il en déduira sa stratégie et les actions à prendre. ça doit être pareil avec le modèle. On doit lui donner une représentation de l'environemennt dans lequel il évolue, et surtoutd de l'environnement futur.
 
-#### 2.2.2 Embedding "environnement" (Map Embedding)
+**Mécanisme** : l'embedding environnement est un vecteur qui évolue au fil de la run. Lors du Mode Repérage, le joueur(et non le modèle pour l'instant) effectue le circuit pour récolter des données. A la suite de cela on découpe ces screenshots en différents segment, et on va calculer l'embeding de ce segment avec un encodeur. Ce n'est donc pas un embeding continue qui évolue en permanence et qui dépend de la run, il sera toujours pré-calculé. Il représentera environ l'environnement sur une durée de 2-3 secondes.
 
-**Rôle** : décrire le contexte global du circuit sur lequel la voiture roule.
+**Comment savoir quand changer d'embeding ?**: Lors de la phase de repérage, les coordonées en 3D de la voiture sont enregistrées. Ces coordonées seront des *mini-chseckpoints* qui permettront de savoir l'avancement de la voiture dans la map. Ainsi certain de ces mini-checkpoints seront associés à un embeding environnement. Quand la voiture passera sur ce mini-checkpoint, l'embeding environnement sera mis à jour avec le nouvel embeding associé. Chaque Embeding environnement sera espacé du même nombre de mini-checkpoints.
 
-**Problème fondamental** : lors de la première passe sur une map inconnue (mode Repérage), le modèle ne sait rien du circuit. Il doit l'explorer et construire une representation de l'environnement au fur et à mesure de sa progression.
 
-**Mécanisme** : l'embedding environnement est un vecteur qui évolue au fil de la run, en intégrant des informations sur les secteurs traversés, les checkpoints atteints, et la topologie locale déduite de la trajectoire. Concrètement :
+### 2.2 Architecture du réseau de neurones
 
-- Le circuit est segmenté en secteurs (segments de longueur fixe ou variable, définis par les checkpoints du jeu ou par une segmentation manuelle).
-- Quand la voiture passe un secteur, une représentation du secteur (position du centre, longueur approximative, courbure moyenne, dénivelé) est ajoutée à un historique sectoriel.
-- L'embeding environnement à un instant t est un condensé de la séquence des secteurs traversés depuis le début de la run, permettant au modèle de savoir "où il est" dans le circuit (progression relative, distance au finish).
+Je ne me sens pas d'expliquer toute l'architecture dans ce document, ja vais me contenter de citer tous les sous modèles qui devront être pris en compte. Pas besoin de rentrer dans les détails de chaque sous-modèle, je m'occuperais moi même de l'architecture exacte de chaque sous-modèle. L'important est de savoir qu'ils existent, ce qu'ils prennent en entrée et ce qu'ils produisent en sortie.
 
-**Point non tranché** : l'embedding environnement est-il un vecteur partagé entre les secteurs (c'est-à-dire que la représentation est la même pour tous les secteurs, et mise à jour sector par sector) ou bien un vecteur propre à chaque secteur (le modèle a accès à la représentation du secteur courant uniquement) ? Cette décision a un impact fort sur la capacité du modèle à planifier à long terme. **À trancher avant implémentation.**
+#### 2.2.1 Sous-modèle "Car Encoder"
 
-#### 2.2.3 Recalibrage continu des embeddings
+**Entrée** : les N dernières frames de télémétrie (vitesse, gear, rpm, inputs) et les N derniers screenshots.
 
-Les embeddings ne sont pas statiques : ils évoluent au cours de la run en fonction des nouvelles observations. Le recalibrage se fait de la manière suivante :
+**Sortie** : un vecteur d'embeding de dimension fixe représentant l'état récent de la voiture.
 
-1. **À chaque frame** : le buffer de télémétrie est mis à jour avec la nouvelle frame. L'embedding voiture est recalculé (ré-appel de la fonction de condensation) à partir du buffer mis à jour.
+**Architecture** : CNN pour les screenshots + MLP pour la télémétrie, fusion des deux via concaténation et passage par un MLP final.(Ou avec des Transformers, à définir)
 
-2. **À chaque secteur** : quand la voiture entre dans un nouveau secteur, l'embedding environnement est mis à jour en intégrant les informations sur le secteur quitté (si le secteur a été parcouru avec succès) ou en propageant une representation de l'incertitude (si le secteur n'a pas été parcouru, par exemple en cas de sortie de route).
+#### 2.2.2 Sous-modèle "Map Encoder"
 
-3. **Recalibrage cross-session** : entre deux runs sur la même map, l'embedding environnement peut être persisté (stocké dans le HDF5 avec un identifiant de map) pour permettre au modèle de "reprendre" depuis une exploration précédente. Cela permettrait de réduire le temps de Repérage sur des maps déjà partiellement explorées.
+**Entrée** : les screenshots du segment de map correspondant à l'embeding environnement à calculer.
 
-**Intervalle de recalibrage** : **à définir** (frame-level ou secteur-level ?). Si secteur-level, le recalibrage est moins fréquent mais plus sémantiquement significatif. Si frame-level, l'embedding est plus réactif mais plus coûteux en calcul.
+**Sortie** : un vecteur d'embeding de dimension fixe représentant l'environnement.
 
-### 2.3 Architecture du réseau de neurones
+**Architecture** : CNN pour les screenshots, éventuellement avec attention spatiale pour se concentrer sur les éléments pertinents (virages, obstacles, etc.).
 
-Le modèle prend en entrée la concaténation des deux embeddings (voiture + environnement) et produit en sortie :
+#### 2.2.3 Sous-modèle "Embeding Goal"
 
-- **Action continue** : {throttle, steering, brake} (valeurs réelles dans [-1, 1] ou [0, 1]).
+**Entrée** : l'embeding environnement courant, l'embeding voiture courant et l'embeding environnement prochain.
 
-L'architecture interne est **à définir** (feedforward simple ? GRU/LSTM ? Transformer léger ?). Le document original mentionne `[256, 128, 64]` comme taille des hidden layers. Cette valeur est un point de départ mais doit être validée par expérimentation en fonction de la dimension des embeddings.
+**Sortie** : un vecteur d'embeding de dimension fixe représentant le "goal" ou l'objectif à atteindre pour la voiture dans le contexte de l'environnement après K étapes.
 
-### 2.4 Buffer de télémétrie en temps réel
+**Architecture** : MLP ou Transformer pour fusionner les deux embeddings et produire un embedding de goal.
 
-Un **buffer circulaire** tourne en permanence dans le Game Interface Process, stockant les N dernières frames de télémétrie. Ce buffer sert à :
+#### 2.2.4 Sous-modèle "Policy Network"
 
-1. **Calculer l'embedding voiture** à chaque frame (condensation temporelle).
-2. **Recalibrer les embeddings** via le mécanisme décrit en 2.2.3.
-3. **Alimenter le dataset d'entraînement** : les frames du buffer sont périodiquement écrites dans le HDF5 ou directement dans le MMAP selon le mode actif.
+**Entrée** : l'embeding voiture, de l'embeding environnement, de l'embeding environnement suivant, de l'embeding goal et du nombre d'étape avant la fin des K étapes.
 
-**Taille du buffer** : **à définir** (compromis entre temps de stockage effectif et mémoire consommée). Une valeur de 15-20 frames (2 secondes à 10 Hz) est un point de départ raisonnable.
+**Sortie** : les actions à prendre (throttle, brake, steering) pour la prochaine frame.
 
-**Implémentation** : le buffer est un `numpy.ndarray` de forme `(N, D)` où D est le nombre de features par frame (vitesse, position xyz, orientation quaternion, inputs actuels, etc.). Les écritures se font en cercle avec un index de tête.
+**Architecture** : MLP ou Transformer pour fusionner les embeddings et produire les actions.
 
-### 2.5 Pourquoi pas de mémoire partagée (IPC mémoire) ?
+#### 2.2.5 Sous-modèle "World Model Car"
 
-Le document original justifie l'utilisation de ZeroMQ plutôt qu'une mémoire partagée. Voici les raisons détaillées :
+**Entrée** : l'embeding voiture courant, l'embeding environnement, l'avancement dans l'embeding environnement(c'est à dire la proportion de mini-checkpoint parcouru sur la totalité de ceux qui délimite l'embeding environnement) et les actions prévues pour la prochaine frame.
 
-- **Résilience aux crashes** : si un processus meurt, le buffer MMAP conserve ses données. Un lock file ou un mécanisme de watchdog permet de détecter le crash et de reprendre proprement. Avec une mémoire partagée, un crash d'un processus pourrait corrompre la mémoire partagée sans détection rapide.
+**Sortie** : l'embeding voiture prédit pour la prochaine frame.
 
-- **Atomicité des checkpoints** : le mécanisme de checkpoint via fichier `.tmp` + `os.rename()` atomique (section 8) est plus simple et plus robuste à implémenter avec des fichiers qu'avec de la mémoire partagée multi-processus.
+**Architecture** : MLP ou Transformer pour prédire l'état futur de la voiture à partir de son état courant et des actions prévues.
 
-- **Indépendance des processus** : chaque processus peut tourner sur une machine différente (si nécessaire à l'avenir) sans modification de l'architecture. ZeroMQ over TCP est transparent à la localisation.
+#### 2.2.6 Sous-modèle "World Model Map"
 
-- **Débugabilité** : logger des messages ZeroMQ est simple (tcpdump, ou simplement un proxy). Logger des accès à de la mémoire partagée est plus complexe.
+**Entrée** : l'embeding environnement courant, et la prochaine frame
+
+**Sortie** : l'embeding environnement prédit pour la prochaine frame.
+
+**Architecture** : MLP ou Transformer.
+
+**A noter** : Dans le vraie circuit, les embeding environnement ne changent pas à chaque frame, mais seulement quand la voiture passe sur un mini-checkpoint. Cependant pour l'entrainement du modèle, on va quand même faire en sorte que le modèle prédit l'embeding environnement à chaque frame, même si il ne change pas. Ainsi le modèle pourra apprendre à prédire l'embeding environnement futur, et pas seulement celui qui est associé au mini-checkpoint. Ce sous-modèle sera utiliser normalement que pour l'entrainement de l'encodeur.
+
+
+
+
+
+
+
+
+
+
+
+#### 2.2.7 Sous-modèle "Predicteur avancement Embeding environnement"
+
+**Entrée* : l'embeding voiture courant, l'embeding environnement courant et l'embeding environnement suivant.
+
+**Sortie** : un nombre entre 0 et 1 qui décrit l'avancement dans l'embeding environement, 0 signifie qu'on est au début, 1 à la fin.
+
+**Architecture** : MLP ou Transformer.
+
+**Purpose**: Permettre d'effectuer un suivie des embeding environnement sans les mini-checkpoints, pourra peut être permettre d'effectuer le mode Adaptation sans le jeu, un peu comme du planning.
+
+#### 2.2.8 Sous-modèle "Predicteur best trajectory"
+
+**Entrée* : Les embeding voitures généré à la fin du mode adaptation(avant les 7s), ainsi que l'embeding environnement courant et futur.
+
+**Sortie** : l'indice du "meilleure" Embeding parmis ceux proposé.
+
+**Architecture** : MLP ou Transformer.
+
+**Purpose**: Permettre de sélectionner la meilleure trajectoire parmi celles généré par le mode Adaptation sans action humaine ni les 7 secondes de run. Cela pourrait aussi permettre d'effectuer le mode adaptation en planning, c'est à dire hors du jeu et ainsi sans la contrainte de temps réel.
+
 
 ---
 
-## 3. Les 5 modes de fonctionnement
+## 3. Les 5 modes de fonctionnement ----------------OK
 
-Chaque mode est indépendant et définit un comportement différent de l'agent, un ensemble différent de composants actifs/inactifs, et un rôle différent vis-à-vis du buffer de données et du dataset d'entraînement.
+Le programme pourra se comporter de 5 manières différentes, ce sont les 5 modes. Certain font intervenir le modèle, d'autres non. L'ensemble de ces 5 modes sera la totalité de ce qui sera nécesaire pour entrainer et faire marcher le modèle. Ce ne sont que des programmes internes, la liaison entre ces modes et l'utilisateur se fera via l'interface graphique décrite plus bas.
 
 ### 3.1 Mode Repérage
 
-**Objectif** : effectuer une première passe exploratoire sur un circuit inconnu, avec un comportement aussi aléatoire que possible, sans apprentissage, dans le seul but de collecter des données de télémétrie et de commencer à construire l'embedding environnement.
+**Objectif** : effectuer une première passe exploratoire sur un circuit inconnu, placer les mini-checkpoints et collecter les screenshots pour les embedings environnements. 
 
-**Entrées** : embeddings vides (réinitialisés), pas de connaissance préalable du circuit.
+**Entrées** : Rien
 
-**Sorties** : trajectoire parcourue (avec succès ou non), données de télémétrie brutes collectées dans le buffer.
+**Sorties** : Les données récolter par la télémétrie en jeu, les screenshots, les positions 3D de la voiture, et les embedings environnements calculés à partir des screenshots.
 
 **Composants actifs** :
-- ✅ Plugin in-game (télémétrie)
-- ✅ Game Interface Process (réception et buffering)
-- ✅ Inference Process (forward pass, même si les sorties sont largement randomisées)
+- ✅ Télémétrie
+- ❌ Game Interface Process (réception et buffering)
+- ❌ Inference Process
 - ❌ Training Process (pas d'entraînement)
-- ✅ Collecte de données dans le MMAP/HDF5 (mode "exploration pure", pas de reward signal à optimiser)
+- ✅ Collecte de données dans le dataset(pas pour entrainement)
 
-**Ce qui est spécifique au mode Repérage** :
-- Le modèle est executé normalement (forward pass à chaque frame), mais l'exploration est maximisée (epsilon = 1.0, c'est-à-dire action entièrement aléatoire ou quasi-aléatoire). Le modèle de scoring (Q-value ou reward estimé) peut toujours tourner pour fournir des métriques de debug, mais son output n'influence pas le comportement.
-- L'embedding environnement est construit en temps réel : à chaque nouveau secteur traversé, les informations du secteur sont intégrées dans l'embedding.
-- Si la voiture sort de la route (respawn), l'exploration reprend depuis le point de respawn, et le secteur est marqué comme "non parcouru avec succès" dans l'embedding environnement.
+**Ce qui est spécifique au mode Repérage** : Le modèle en lui même ne fait rien, c'est l'utilisateur qui sera chargé de faire le tour du circuit.
 
-**Interaction avec le buffer** : les frames sont écrites dans le MMAP en temps réel. Le MMAP est périodiquement flushé dans le HDF5. La distinction mode d'origine des données (un champ `origin_mode` dans le HDF5) permet de filtrer les données Repérage lors de l'entraînement si nécessaire.
-
-**Interaction avec le dataset** : les données collectées en mode Repérage sont ajoutées au dataset HDF5 avec un label `mode: "reperage"`. Ces données servent de base initiale pour que le modèle commence à avoir une représentation du circuit avant le mode Adaptation.
+**Interaction avec le dataset** : les données collectées en mode Repérage sont ajoutées au dataset HDF5 dans une sous partie spécifique.
 
 **Quand passer en Repérage** : automatiquement au démarrage d'une nouvelle map, ou manuellement via l'interface de contrôle.
 
-**Quand sortir du mode Repérage** : quand le nombre de secteurs parcourus avec succès atteint un seuil (par exemple 80% du circuit), ou quand l'utilisateur le décide manuellement.
+**Quand sortir du mode Repérage** : quand l'utilisateur le décide manuellement via l'interface graphique.(il peut faire plusieur run et n'en sélectionné qu'une. Voir les spécificité dans la partie sur l'interface graphique plus bas)
 
 ---
 
 ### 3.2 Mode Imitation
 
-**Objectif** : apprendre à imiter des trajectoires humaines en observant des replays enregistrés et en construisant un dataset (frame, input) synchronisé.
+**Objectif** : apprendre à imiter des trajectoires humaines en observant des replays enregistrés dans le dataset.
 
-**Entrées** : un replay humain visualisé dans le jeu, des screenshots capturés, les inputs affichés via le plugin Openplanet.
+**Entrées** : Les données de run enregistré au préalable dans le dataset à travers le *Mode Record Replay*
 
-**Sorties** : un dataset HDF5 structuré, des données prêtes pour l'entraînement supervisé.
-
-**Pipeline "crédule"** (nom de travail du programme de synchronisation) :
-
-Le pipeline ne passe **jamais par des fichiers .Gbx**. L'approche est la suivante :
-
-1. **Visualisation du replay dans le jeu** : l'opérateur charge un replay humain dans Trackmania 2020. Le jeu lit le replay et rejoue la run en temps réel sur l'écran.
-
-2. **Capture des screenshots** : pendant que le replay se déroule, un programme capture périodiquement (à 10 ou 30 Hz, à définir) des screenshots de la fenêtre du jeu. Chaque screenshot est horodaté avec un timestamp.
-
-3. **Affichage des inputs via plugin Openplanet** : le plugin Openplanet (en mode "affichage debug") affiche en overlay dans le jeu les valeurs courantes des inputs (steering, throttle, brake) sous forme de texte ou de valeurs numériques. Cet affichage est visible sur les screenshots.
-
-4. **Programme "crédule" de synchronisation** :
-   - Le programme reçoit les screenshots capturés (avec timestamps).
-   - Il analyse chaque screenshot et extrait les valeurs d'inputs affichées par le plugin (via OCR — reconnaissance de caractères — ou via une lecture de pixel pour des valeurs numériques stylisées). **C'est le point le plus fragile du pipeline** (voir section 12 — Risques et limites).
-   - Il associe chaque screenshot à l'input correspondant au même instant (en utilisant le timestamp comme clé de synchronisation).
-   - Il produit en sortie une série de paires (screenshot, input) structurées, écrites dans le HDF5.
-
-5. **Post-processing** : les paires sont triées par timestamp, nettoyées (suppression des frames erronées, interpolation des valeurs manquantes), et stockées dans le HDF5 avec les métadonnées appropriées.
-
-**Variant "reduced info"** : pour simplifier l'OCR et réduire l'erreur de reconnaissance, le plugin peut afficher les inputs non pas sous forme de texte lisible mais sous forme de barres visuelles (genre gauge horizontal) dont la position peut être lue par analyse d'image (mesure de la position du bord de la barre) plutôt que par OCR. **Statut : à définir.**
-
-**Ce qui est spécifique au mode Imitation** :
-- Le mode Imitation n'implique pas de "jouer" en temps réel. C'est un mode hors-ligne (offline) qui prépare des données pour l'entraînement.
-- Une fois le dataset construit, le Training Process peut s'entraîner dessus en mode supervisé (loss MSE entre action prédite et action humaine).
-- Les données Imitation sont stockées dans le HDF5 avec `origin_mode: "imitation"` et un identifiant du replay source.
+**Sorties** : Nouveau checkpoint du modèle entraîné sur les données, avec comme objectif d'imiter les replays enregistrés
 
 **Composants actifs** :
-- ✅ Programme "crédule" (collecte des données, hors-ligne)
-- ❌ Plugin in-game en mode jeu (pas de boucle de jeu active)
-- ✅ Training Process (entraînement supervisé sur les données collectées)
-- ❌ Inference Process (pas de forward pass en temps réel dans ce mode)
+- ❌ Télémétrie
+- ❌ Game Interface Process (réception)
+- ✅ Inference Process (forward pass, production des actions)
+- ✅ Training Process (backward pass, mise à jour des poids)
+- ❌ Collecte de données dans le dataset
 
 ---
 
+### 3.3 Mode Record Replay
+
+**Objectif** : capturer les replays qui servirons pour le mode Imitation.(ce fait après le repérage)
+
+**Explications supplémentaires**: J'aurais bien aimé me servir de replay déjà enregistré dans le jeu(par exemple les WR), cependant pour la première version du modèle ce ne sera pas la cas. En effet le modèle ne va pas uniquement se baser sur les screenshots pour prendre ses décisions, il va aussi se baser sur la télémétrie. Or les replay du jeu ne contiennent pas la télémétrie, seulement les inputs du joueur. Et il m'a été impossible de récupérer les données manquantes à partir du replays(je parle de la gear, les rpm, la vitesse et la position 3D). Donc ce sera à l'utilisateur de faire les replays pour le modèle manuellement. Dans un second temps il sera intéressant de ne pas inclure les données de télémétrie dans le modèle, et de voir si le fait de pouvoir s'entrainer sur les WR du jeu est suffisant pour que le modèle apprenne à jouer de manière compétitive.
+
+**Pipeline** :
+1. Le joueur lance le mode depuis l'interface graphique.
+2. Il effectue des run sur la map, la télémétrie récupère toutes les données nécessaires.
+3. Une fois que le joueur est satisfait d'une run, il sélectionne depuis l'interface graphique la run et la fait sauvegarder.
+4. Il peut arrêter le mode, en lancer un autre, ou refaire un run pour en sauvegarder une nouvelle. Il y aura la possibilité de visionner les run sauvegardées depuis l'interface et de supprimer des run sauvegardé 
+
+**Distinction avec l'Imitation** : Le mode Record Replay est une collecte de données en temps réel, tandis que le mode Imitation est un entraînement supervisé sur des données déjà collectées.
+
 ### 3.3 Mode Inférence
 
-**Objectif** : mode "jeu pur" — exécuter le modèle en temps réel pour jouer de manière compétitive. La récolte de données sera toujours active et le model sera quand même entrainé dans le Training process. La spécificité et que le model ne sera pas changer toutes les 20s mais entre chaque run.
+**Objectif** : mode "jeu pur" — exécuter le modèle en temps réel pour jouer de manière compétitive. La récolte de données sera toujours active et le model sera quand même entrainé dans le Training process.
 
 **Entrées** : la télémétrie courante du jeu, le modèle chargé depuis le dernier checkpoint.
 
-**Sorties** : les actions à envoyer au jeu (throttle, steering, brake).
+**Sorties** : les actions à envoyer au jeu (throttle, steering, brake) et les données de télémétrie collectées pour le dataset.
 
 **Composants actifs** :
 - ✅ Plugin in-game (télémétrie)
 - ✅ Game Interface Process (réception)
 - ✅ Inference Process (forward pass, production des actions)
 - ✅ Training Process (inactif)
-- ✅ Collecte de données (désactivée — pas de MMAP flush ni d'écriture HDF5)
+- ✅ Collecte de données pour entrainement. 
 
 **Ce qui est spécifique au mode Inférence** :
 - L'objectif est la performance pure : vitesse d'inférence maximale, latence minimale.
-- Le modèle peut être en mode "evaluation" (dropout désactivé, batchnorm en mode eval).
 - La récolte de donné se fera quand même et tout sera stocké dans le HDF5.
+- Possibilité de ne pas entrainer le modèle du tout, ce sera une option dans l'interface graphique.
 
 **Quand utiliser ce mode** : benchmarking, compétition, démonstrations avec un aspect mineur sur l'entrainement(aspect à ne pas complètement négliger).
 
@@ -267,7 +271,7 @@ Le pipeline ne passe **jamais par des fichiers .Gbx**. L'approche est la suivant
 
 ### 3.4 Mode Adaptation
 
-**Objectif** : exploration autonome de trajectoires sur un circuit partiellement ou totalement inconnu, en utilisant une méthode analogue à la cross-entropy method (CEM) pour générer et évaluer des trajectoires candidates, et en mettant à jour les poids du modèle périodiquement.
+**Objectif** : exploration autonome de trajectoires sur un circuit, en utilisant une méthode analogue à la cross-entropy method (CEM) pour générer et évaluer des trajectoires candidates, et en mettant à jour les poids du modèle périodiquement.
 
 **C'est le mode le plus complexe du système.** Il est détaillé en section 4.
 
@@ -284,45 +288,20 @@ Le pipeline ne passe **jamais par des fichiers .Gbx**. L'approche est la suivant
 
 ---
 
-### 3.5 Mode Record Replay / Record Replay Imitation
 
-**Objectif** : capturer les performances de l'agent après qu'il ait atteint un niveau satisfaisant, pour constituer un "replay" de l'IA qui peut servir de référence ou de base de comparaison.
-
-**Note terminologique** : "Record Replay" et "Record Replay Imitation" désignent la même chose. Ce n'est pas un mode distinct du mode Inférence : c'est exactement le mode Inférence, sauf que l'on persiste les données de la run (trajectoire complète, temps au tour, décisions prises) dans un format qui permet de rejouer la run et de la comparer à d'autres runs (humaines ou IA).
-
-**Pipeline** :
-1. L'agent joue en mode Inférence sur un circuit.
-2. Pendant la run, chaque frame est enregistrée dans le HDF5 avec un flag `is_record: true`.
-3. À la fin de la run, si le temps est meilleur que le record précédent pour cette map, le fichier est conservé comme "best record". Sinon, il est archivé ou supprimé.
-
-**Composants actifs** :
-- ✅ Plugin in-game (télémétrie)
-- ✅ Game Interface Process
-- ✅ Inference Process
-- ❌ Training Process
-- ✅ Collecte de données (active, mais sélective — on ne garde que les runs qui valent la peine d'être archivées)
-
-**Distinction avec l'Imitation** : en Record Replay, c'est l'IA qui joue et on enregistre ses actions. En Imitation, c'est un humain qui joue et on enregistre ses actions pour que l'IA apprenne à les imiter.
 
 ---
 
-## 4. Cycle Adaptation — Détaillé
+## 4. Cycle Adaptation — Détaillé --------------------OK
 
-### 4.1 Vue d'ensemble
+Le mode Adaptation a pour but de permettre au modèle de s'adapter à des circuits inconnus pour à la fois augmenter le niveau générale du modèle mais bien sûr aussi pour rendre le modèle meilleure sur ce circuit. Le mode Adaptation est un mode d'exploration autonome, où le modèle va générer des trajectoires candidates, les évaluer, et mettre à jour ses poids périodiquement pour améliorer sa performance sur le circuit en cours. Le processus utilisé est un peu comme la cross-entropy method, donc je vais l'expliquer birèvement avant de donner les particularités de ce mode. 
 
-Le mode Adaptation est la fonctionnalité la plus sophistiquée du système. Il combine :
 
-1. **Exploration de trajectoires candidates** via la cross-entropy method (CEM), pour chaque secteur du circuit.
-2. **Sélection de la meilleure trajectoire** à chaque secteur, avec un mécanisme de choix glouton ou epsilon-greedy.
-3. **Mise à jour des poids du modèle** de manière périodique (tous les 2 secteurs), pas à chaque secteur.
-
-L'idée sous-jacente est que le modèle ne doit pas ré-apprendre à conduire sur chaque secteur : il doit apprendre à **reconnaître** un type de secteur et à appliquer la bonne stratégie, en se fondant sur son expérience préalable et sur les données collectées en exploration.
-
-### 4.2 La cross-entropy method (CEM) — Rappel
+### 4.1 La cross-entropy method (CEM) — Rappel
 
 La CEM est une algorithme d'optimisation itératif，适用于 les problèmes où l'on veut trouver une solution optimale dans un espace de haute dimension, et où l'on peut évaluer la "qualité" d'une solution (via une fonction de reward).
 
-**Principe** (version simplifiée pour notre cas) :
+**Principe** :
 
 1. **Initialisation** : on définit une distribution de probabilité sur l'espace des trajectoires candidates (typiquement une distribution gaussienne multivariate).
 
@@ -338,86 +317,113 @@ La CEM est une algorithme d'optimisation itératif，适用于 les problèmes o�
 
 7. **Output** : la meilleure trajectoire de la dernière itération est sélectionnée.
 
-**Pourquoi la CEM et pas du random search pur ?** La CEM utilise l'information des évaluations précédentes pour guider l'exploration. Elle converge plus rapidement vers des trajectoires de haute qualité que le random search, tout en évitant de se concentrer trop tôt sur un optimum local (grâce à la stochasticité maintenue dans la distribution).
 
-### 4.3 Séquencement secteur par secteur
+### 4.3 Le Mode
 
-Le cycle Adaptation fonctionne secteur par secteur. Un secteur est un segment du circuit délimité par deux checkpoints ou par une segmentation manuelle.
+Notre but est donc de sélectioner la meilleure trajectoire et d'entrainer le modèle à la reproduire. Mais faire cette méthode sur tout de circuit sera trop coûteaux en temps et très peu efficace. On va donc effectuer cette méthode sur des petites secteur de circuit à la fois.
+Ces secteurs de circuit ne sont pas physique, ils ne sont pas délimités par des barrières physiques mais par des actions.(le nombre d'action entre chaque décision d'embeding voiture goal pour être précis)
 
-Pour chaque secteur, le déroulé est le suivant :
+Au début de chaque secteurs, un embeding voiture goal sera décidé par le modèle goal. (Ce que nous cherchons principalement à optimiser est ce modèle goal). Ensuite le modèle effectuera plusieurs trajectoires de k étapes(k étant le nombre d'actions avant qu'un embeding voiture goal soit redécidé), soit en mettant un bruit sur l'embeding goal, soir sur les actions d'une manière ou d'une autre(à préciser).
+Et là nous avons deux problèmes:
+- Le  premier est qu'il est impossible de sélectionner avec certitude la meilleure trajectoire après ces k actions. Dans Trackmania la qualité d'une trajectoire est déterminé par son effet imédiat (c'est-à-dire si on est allé vite sur la portion de circuit), mais aussi par son effet ultérieur(c'est-à-dire si la trajectoire met le joueur dans de bonne conditions pour la suite). Dans certains cas se crasher contre un mur peut être bénéfique, dans d'autres il vaut mieux garder + de vitesse et délaisser l'optimisation locale.
+- Le second problème est que l'on ne peut pas simuler les trajectoire hors jeux, il faut toutes les jouer manuellement dans le jeux, ce qui rend le processus très long
+
+Pour palier au premier problème, j'ai deux idée. Une est "automatique", l'autre manuel. La première option est qu'un joueur sélectionne la meilleure trajectoire. C'est une façon manuel de décider. Mais ce n'est pas une vraie solution, le but est quand même de laisser le modèle s'entrainer sans intéraction humaine. Donc la deuxième se veut être plus automatique. Elle se base sur le fait qu'une bonne trajetoire mettra le modèle dans de donne dispositions pour la suite du circuit. L'idée est donc de "continuer" chaque trajetoire. A la fin de chaque k actions différentes au lieu de directement relancer une autre trajectoire on lache le modèle à partir de la fin des k actions sur 7s supplémentaire(donc ce sera un peu comme le mode Inference, le comportement du modèle sera le même qu'en mode inférence à ce moment). Ainsi le modèle qui est allé le plus loin à la fin des 7s aura + de chance d'être une très bonne trajectoire. 
+
+Pour le deuxième problème, il faut penser à comment les humains s'adaptent à un circuit. Quand le joueur débute il va tester tout plein de possibilités. Mais une fois qu'il aura acqui de l'experience le joueur pourra simuler dans sa tête les possibilitées et évaluer les plus prometteuses sans effectuer de test en jeu. L'idée est donc la même: Faire le mode adaptation sans la simulation en jeu. Ce n'est pas une statégie valable au début de l'entrainement du modèle, mais à long terme ça peut grandement acroitre la vitesse d'évolution du modèle. C'est pour cela que dans les sou-modèles nous avons le "Predicteur avancement Embeding environnement" et le "Predicteur best trajectory". Ces deux modèles serviront à supprimer le besoin des mini-checkpoints qui est la seule chose retenant le besoin de la simulation en jeu. Ainsi une fois les "meilleurs trajectoires" sélectionné il n'y aura qu'une toute petite sélection de trajectoire à tester en jeu pour trouver la vraie meilleure. Ce n'est pas un remplacement complet du mode Adaptation "réel", mais plutot une sorte de filtre qui améliorerait grandement l'efficacité du mode.
+
+Pendant toutes les simulationd en jeu, toute la télémétrie sera en cours et les données seront enregistrées dans le HDF5 pour l'entrainement de tous les sous-modèles. La version du modèle ne sera pas changé à chaque secteur, mais tous les deux secteurs(environ, à tester et vérifier).
+
+Voici le "pseudocode" de ce mode Adaptation:
 
 ```
-POUR CHAQUE SECTEUR s :
+POUR CHAQUE SECTEUR s (délimité par k actions) :
 
-    1. [Sélection de trajectoire — à chaque secteur]
+    1. [Décision de l'embedding goal]
 
-       a. L'agent est positionné à l'entrée du secteur s.
-       b. Le module CEM génère N trajectoires candidates (échantillonnage + évaluation itérative).
-       c. La meilleure trajectoire (celle avec le plus haut reward) est sélectionnée.
-       d. L'agent l'exécute en temps réel (boucle de jeu normale, le modèle produit des actions frame par frame en suivant la trajectoire sélectionnée).
-       e. Le temps de parcours du secteur est enregistré.
-       f. La télémétrie du secteur est stockée dans le MMAP.
+       a. Le modèle goal génère un embedding voiture cible pour le secteur s,
+          à partir de l'état courant (position, vitesse, historique du secteur précédent).
 
-    2. [Mise à jour des poids — tous les 2 secteurs seulement]
+    2. [Génération du bruit — N variantes candidates]
 
-       a. Si (numéro du secteur % 2 == 0) :
-          - Le Training Process charge les données accumulées dans le MMAP (les 2 derniers secteurs).
-          - Un pas de gradient (backward pass) est effectué, mettant à jour les poids du modèle.
-          - Un nouveau checkpoint est créé (atomique, via le mécanisme de la section 8).
-          - L'Inference Process recharge le nouveau checkpoint.
+       a. Générer N variantes de bruit, appliqué SOIT sur l'embedding goal SOIT sur les
+          actions (les deux seront testés empiriquement, non tranché pour l'instant).
+       b. Ces N variantes définissent N trajectoires candidates théoriques pour le secteur s.
 
-       b. Si (numéro du secteur % 2 != 0) :
-          - Aucun entraînement n'a lieu. Le modèle reste inchangé.
-          - La télémétrie est toujours collectée dans le MMAP mais n'est pas encore utilisée pour l'entraînement.
-          - À la fin du secteur impair, les données sont conservées en attente du secteur pair suivant.
+    3. [Pré-sélection — utilise les Prédicteurs SI disponibles et fiables]
 
-    3. [Fin de secteur]
+       SI les Prédicteurs (avancement embedding environnement + best trajectory)
+          sont entraînés et jugés fiables (cf. critère de fiabilité à définir, section suivante) :
 
-       a. L'agent arrive à la fin du secteur s (checkpoint ou finish).
-       b. Si s == dernier secteur : fin de la run.
-       c. Sinon : avancer au secteur s+1 et reprendre à l'étape 1.
+           a. POUR CHAQUE variante i (i = 1 à N), SANS jouer en jeu :
+                - Le Prédicteur avancement embedding environnement projette l'état latent
+                  résultant après k actions (+ 7s simulées, à tester), à partir de la variante i.
+                - Le Prédicteur best trajectory estime le score de progression associé
+                  à cet état latent projeté.
+           b. Classer les N variantes par score prédit.
+           c. Retenir seulement un sous-ensemble restreint M << N des meilleures variantes
+              (ex. M = 2 ou 3) pour passer à l'étape 4. Les autres sont abandonnées sans
+              jamais avoir été jouées.
+
+       SINON (mode réel pur — Prédicteurs absents ou pas encore fiables) :
+
+           a. Aucune présélection. Les N variantes passent toutes à l'étape 4 (M = N).
+
+    4. [Test réel des candidats retenus]
+
+       POUR CHAQUE variante retenue i (i = 1 à M) :
+
+           a. Rejouer l'agent en jeu depuis le début du secteur s, sur k actions,
+              avec la variante i appliquée.
+           b. Enregistrer la trajectoire résultante (états, actions, screenshots).
+              SI mode_sélection == "manuel":
+                    - Repartir de la fin de ces k actions et continuer 7s supplémentaires
+                      en mode comportement "Inference" (sans bruit, politique courante).
+                    - Mesurer la distance parcourue / progression atteinte après ces 7s.
+           e. Stocker (trajectoire_i, distance_atteinte_i) et toute la télémétrie
+              associée dans le HDF5 — ces données réelles serviront aussi à entraîner
+              les Prédicteurs (voir étape 6).
+
+       [Sélection manuelle — option alternative, remplace la sélection auto ci-dessous]
+       SI mode_sélection == "manuel" :
+           - Afficher les M trajectoires testées (replays) dans l'UI.
+           - Attendre le choix de l'opérateur pour désigner i*.
+       SINON :
+           - Sélectionner automatiquement i* = variante ayant la plus grande
+             distance_atteinte après les 7s.
+
+    5. [Exécution réelle de la trajectoire retenue]
+
+       a. L'agent EXÉCUTE i* en jeu, en temps réel, sur les k actions du secteur s.
+
+    6. [Mise à jour des poids — fréquence à définir, ex. tous les 2 secteurs]
+
+       a. SI (numéro du secteur % f == 0) :
+            - Le Training Process charge les données réelles accumulées dans le HDF5
+              (secteurs depuis la dernière mise à jour).
+            - Entrainement du modèle goal et modèle d'actions à recopier i*
+              et de sa télémétrie.
+            - SI on est en mode réel (étape 3 sinon-branche) :
+                 - Les Prédicteurs sont ÉGALEMENT entraînés sur les M trajectoires réelles
+                   testées à l'étape 4 (pas seulement sur i* — on veut qu'ils apprennent
+                   à généraliser sur des trajectoires variées, pas seulement les gagnantes).
+            - SI on est en mode présélection (étape 3 si-branche) :
+                 - Les Prédicteurs ne sont PAS entraînés (aucune nouvelle donnée réelle
+                   sur les variantes abandonnées — seulement M trajectoires réelles
+                   disponibles, potentiellement réutilisées pour affiner les Prédicteurs
+                   si besoin, mais pas prioritaire).
+            - Nouveau checkpoint créé (mécanisme atomique, section 8).
+            - L'Inference Process recharge le checkpoint.
+
+       b. SINON :
+            - Aucun entraînement. Télémétrie collectée mais "mise en attente".
+
+    7. [Fin de secteur]
+
+       a. Agent arrive en fin de secteur s (fin des k actions cumulées).
+       b. SI s == dernier secteur de la run : fin.
+       c. SINON : s = s + 1, retour à l'étape 1 avec comme état de base la fin de la trajectoire i*.    
 ```
-
-**Exemple concret sur 4 secteurs** :
-
-| Secteur | Action principale | Entraînement |
-|---------|-------------------|--------------|
-| Secteur 1 | CEM → sélection trajectoire → exécution | ❌ (secteur impair — pas d'update) |
-| Secteur 2 | CEM → sélection trajectoire → exécution | ✅ (secteur pair — update poids avec données S1+S2) |
-| Secteur 3 | CEM → sélection trajectoire → exécution | ❌ (secteur impair — pas d'update) |
-| Secteur 4 | CEM → sélection trajectoire → exécution | ✅ (secteur pair — update poids avec données S3+S4) |
-| Secteur 5 | CEM → sélection trajectoire → exécution | ❌ (secteur impair — pas d'update) |
-
-**Pourquoi cette séparation ?**
-
-- La mise à jour des poids tous les 2 secteurs (plutôt que tous les secteurs) permet de regrouper les données en mini-batchs de taille suffisante pour un entraînement stable. Mettre à jour les poids à chaque secteur (avec des données d'un seul secteur) mènerait à des mises à jour très fréquentes, bruitées, et potentiellement destructrices.
-- La sélection de trajectoire à chaque secteur (plutôt que tous les 2 secteurs) garantit que le modèle utilise toujours l'information la plus récente pour choisir sa trajectoire. Même si les poids ne sont pas mis à jour au secteur 1, le modèle peut quand même améliorer sa sélection en exploitant l'embedding environnement mis à jour avec les données du secteur 1.
-
-### 4.4 Exploration vs Exploitation en Adaptation
-
-Pendant le mode Adaptation, un paramètre **epsilon_actions** (à définir) contrôle le niveau d'exploration aléatoire dans les actions frame par frame (pas dans la sélection de trajectoire, qui est déjà gouvernée par la CEM). Ce paramètre est distinct de l'epsilon utilisé en mode Repérage :
-
-- **epsilon_actions** : probabilité de prendre une action aléatoire au lieu de l'action du modèle à une frame donnée. Typiquement faible (0.01 à 0.05), car l'exploration est principalement faite via la CEM au niveau des trajectoires, pas au niveau des frames.
-- **epsilon_goal** (à définir) : probabilité de choisir une trajectoire aléatoire (non-CEM) au lieu de la trajectoire sélectionnée par la CEM. Ce paramètre permet d'éviter que le modèle se bloque dans un optimum local en forçant occasionnellement l'exploration d'une trajectoire non optimisée.
-
-### 4.5 Rôle de la télémétrie en mode Adaptation
-
-Pendant le mode Adaptation, le buffer de télémétrie tourne en permanence :
-
-- Les frames sont écrites dans le MMAP en temps réel.
-- Chaque frame est tagée avec le `sector_id` courant, le `mode` ("adaptation"), le `timestamp`, et le `reward_cumulé` partiel.
-- Quand le secteur se termine, les données du secteur sont extraites du MMAP et flushées dans le HDF5, avec un flag `adaptation_sector` permettant de les identifier comme données d'exploration autonome.
-- Les données d'un secteur pair (utilisées pour l'entraînement) sont stockées dans le HDF5 avant le début de l'entraînement. Après l'entraînement, elles restent dans le HDF5 pour constituer le dataset permanent.
-
-### 4.6 Mécanisme de fallback en cas d'échec de trajectoire
-
-Si pendant l'exécution d'une trajectoire sélectionnée par la CEM, la voiture sort de la route (respawn), plusieurs stratégies sont possibles (à définir) :
-
-- **Restart secteur** : recommencer le secteur depuis le début avec une trajectoire différente (échantillonnage d'une nouvelle trajectoire depuis la distribution CEM actuelle).
-- **Fallback vers un modèle simple** : utiliser un modèle de conduite conservative (genre suivre le milieu de la route à vitesse modérée) jusqu'à ce que le modèle Adaptation reprenne le contrôle.
-- **Marking du secteur** : marquer le secteur comme "échoué" dans l'embedding environnement, et recommencer la sélection de trajectoire avec une stratégie plus conservative.
-
-Le choix de la stratégie a un impact sur la vitesse de convergence du mode Adaptation et sur la qualité du dataset collecté.
 
 ---
 
@@ -753,51 +759,101 @@ L'architecture est composée de **4 processus séparés** qui communiquent via Z
 
 ### 6.6 Schéma complet des canaux ZeroMQ
 
-A COMPLETER
-
 ```
                         ZeroMQ IPC Schema
-┌───────────────────────────────────────────────────────────────┐
-│ GIP ──PUSH──► [telemetry] ──SUB──► INF        (PUB/SUB)       │
-│                                                               │
-│ INF ──PUSH──► [action] ──PULL──► GIP          (PUSH/PULL)     │
-│                                                               │
-│ CC  ──PUB──► [mode] ──SUB──► INF              (PUB/SUB)       │
-│                                                               │
-│ INF, TRN ──PUSH──► [stats] ──PULL──► CC       (PUSH/PULL)     │
-│                                                               │
-│ TRN ──PUSH──► [checkpoint_ready] ──PULL──► CC (PUSH/PULL)     │
-│                                                               │
-│ CC  ──PUSH──► [checkpoint_signal] ──PULL──► INF (PUSH/PULL)   │
-│                                                               │
-│ Filesystem:                                                   │
-│   /tmp/ltm_telemetry.mmap    ← MMAP partagé par GIP et P3     │
-│   /data/ltm_sequences.h5     ← HDF5 écrit par GIP, lu par TRN │
-│   checkpoints/model_v{n}.pt  ← écrit par TRN, lu par INF      │
-│   version.txt                ← écrit par TRN, lu par INF      │
-└───────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ GIP ──PUB──► [telemetry] ──SUB──► INF               (PUB/SUB)      │
+│                                                                    │
+│ INF ──PUSH──► [action] ──PULL──► GIP                (PUSH/PULL)    │
+│                                                                    │
+│ CC  ──PUB──► [mode] ──SUB──► INF, GIP                (PUB/SUB)     │
+│                                                                    │
+│ CC  ──PUSH──► [trajectory_selection] ──PULL──► INF   (PUSH/PULL)   │
+│                                                                    │
+│ INF ──PUSH──► [candidates] ──PULL──► CC              (PUSH/PULL)   │
+│                                                                    │
+│ INF, TRN ──PUSH──► [stats] ──PULL──► CC              (PUSH/PULL)   │
+│                                                                    │
+│ TRN ──PUSH──► [checkpoint_ready] ──PULL──► CC        (PUSH/PULL)   │
+│                                                                    │
+│ CC  ──PUSH──► [checkpoint_signal] ──PULL──► INF      (PUSH/PULL)   │
+│                                                                    │
+│ INF ──PUSH──► [checkpoint_loaded] ──PULL──► CC       (PUSH/PULL)   │
+│                                                                    │
+│ CC  ──PUSH──► [training_trigger] ──PULL──► TRN       (PUSH/PULL)   │
+│                                                                    │
+│ Filesystem :                                                       │
+│   /tmp/ltm_telemetry.mmap    ← MMAP partagé par GIP et INF         │
+│   /data/ltm_sequences.h5     ← HDF5 écrit par GIP, lu par TRN      │
+│   checkpoints/model_v{n}.pt  ← écrit par TRN, lu par INF           │
+│   checkpoints/mini_v{n}.pt   ← écrit par TRN, lu par INF           │
+│   version.txt                ← écrit par TRN, lu par INF           │
+└────────────────────────────────────────────────────────────────────┘
 ```
+---
 
 ### 6.7 Détail des files ZeroMQ
 
 | File | Type | Pattern | Fréquence | Source | Destinataires | Contenu |
 |------|------|---------|-----------|--------|---------------|---------|
 | `telemetry` | PUB/SUB | publish-subscribe | 10 Hz | Game Interface | Inference | `{frame_data, timestamp, sector_id}` |
-| `action` | PAIR | bidirectional | 10 Hz | Inference | Game Interface | `{throttle, steer, brake}` |
-| `mode` | PUB/SUB | publish-subscribe | événement | Control Center | Inference, Game Interface | `{type: "mode_change", mode: "adaptation"}` |
+| `action` | PUSH/PULL | pipeline | 10 Hz | Inference | Game Interface | `{throttle, steer, brake}` |
+| `mode` | PUB/SUB | publish-subscribe | événement | Control Center | Inference, Game Interface | `{type: "mode_change", mode, params}` |
+| `trajectory_selection` | PUSH/PULL | pipeline | événement (fin de présélection, mode Adaptation manuel) | Control Center | Inference | `{sector_id, selected_index, source}` |
+| `candidates` | PUSH/PULL | pipeline | événement (par secteur, mode Adaptation) | Inference | Control Center | `{sector_id, candidates: [{index, score, trajectory}]}` |
 | `stats` | PUSH/PULL | pipeline | 1 Hz | Inference, Training | Control Center | `{loss, reward, q_value, sector_time}` |
-| `checkpoint_ready` | PUSH/PULL | pipeline | événement | Training | Control Center | `{version: n, path: "..."}` |
-| `checkpoint_signal` | PUSH/PULL | pipeline | événement | Control Center | Inference | `{version: n, path: "..."}` |
+| `checkpoint_ready` | PUSH/PULL | pipeline | événement | Training | Control Center | `{version, path, type: "full"/"mini", loss, training_samples}` |
+| `checkpoint_signal` | PUSH/PULL | pipeline | événement | Control Center | Inference | `{version, path, type: "full"/"mini"}` |
+| `checkpoint_loaded` | PUSH/PULL | pipeline | événement | Inference | Control Center | `{version, success, timestamp}` |
+| `training_trigger` | PUSH/PULL | pipeline | événement (manuel, opérateur) | Control Center | Training | `{dataset: "imitation"/"adaptation", map_id}` |
+
+
+#### Explication des canaux ZeroMQ explicitement
+
+**`telemetry` (GIP → INF, PUB/SUB)**
+Transporte l'état brut du jeu à chaque frame (position, vitesse, inputs, etc.). C'est la seule source de vérité sur ce qui se passe en jeu ; sans ce canal, INF ne peut ni calculer d'embedding ni décider d'action.
+
+**`action` (INF → GIP, PUSH/PULL)**
+Transporte la décision de conduite calculée par INF (throttle, steering, brake) pour injection dans le jeu. C'est le seul canal qui a un effet réel sur la voiture.
+
+**`mode` (CC → INF, GIP, PUB/SUB)**
+Diffuse les changements de mode (Repérage, Imitation, Inférence, Adaptation, Record Replay) et leurs paramètres associés (ex. epsilon du bruit, nombre de candidats CEM, mode de sélection manuel/auto). Permet à CC de piloter le comportement du système sans redémarrer les processus.
+
+**`trajectory_selection` (CC → INF, PUSH/PULL)**
+Utilisé uniquement en mode Adaptation avec sélection manuelle : transmet le choix de l'opérateur parmi les trajectoires candidates proposées pour le secteur en cours.
+
+**`candidates` (INF → CC, PUSH/PULL)**
+Envoie les trajectoires candidates générées par le CEM (avec leurs scores) pour affichage dans la GUI, condition nécessaire pour que l'opérateur puisse faire un choix éclairé via `trajectory_selection`.
+
+**`stats` (INF, TRN → CC, PUSH/PULL)**
+Centralise les métriques de suivi (loss, reward, latence, temps de secteur) pour affichage et archivage dans la GUI. Purement informatif, n'affecte aucune décision du système.
+
+**`checkpoint_ready` (TRN → CC, PUSH/PULL)**
+Notifie qu'un nouveau checkpoint (complet ou mini) a été écrit sur disque et est prêt à être chargé. Déclenche la suite de la chaîne de mise à jour du modèle.
+
+**`checkpoint_signal` (CC → INF, PUSH/PULL)**
+Ordonne à INF de charger un checkpoint précis. Séparé de `checkpoint_ready` pour que CC garde la main sur *quand* le rechargement a lieu (ex. attendre la fin du secteur en cours plutôt que couper en plein milieu).
+
+**`checkpoint_loaded` (INF → CC, PUSH/PULL)**
+Confirme que le chargement du checkpoint a réussi (ou échoué). Sans ce retour, CC n'a aucun moyen de détecter un échec de chargement ou un crash d'INF pendant l'opération.
+
+**`training_trigger` (CC → TRN, PUSH/PULL)**
+Déclenche manuellement un entraînement (ex. réentraînement sur données Imitation), en dehors des déclenchements automatiques liés aux événements de secteur en mode Adaptation.
+
+
+---
+
+
 
 ### 6.8 Format des messages ZeroMQ
 
-**Telemetry** :
+**Telemetry**
 ```json
 {
     "type": "telemetry",
     "timestamp": 1722086462.034,
-    "sector_id": 3,
     "map_id": "map_001",
+    "sceenshot": "?",
     "speed": 45.2,
     "position": {"x": 100.5, "y": 200.3, "z": 5.0},
     "steering": -0.12,
@@ -809,54 +865,93 @@ A COMPLETER
 }
 ```
 
-**Action** :
+**Action**
 ```json
 {
     "type": "action",
     "timestamp": 1722086462.054,
-    "throttle": 0.85,
+    "throttle": 1,
     "steering": -0.08,
     "brake": 0.0
 }
 ```
 
-**Mode** :
+**Mode**
 ```json
 {
     "type": "mode_change",
     "mode": "adaptation",
     "params": {
-        "epsilon_actions": 0.05,
-        "epsilon_goal": 0.1,
-        "cem_iterations": 10,
-        "cem_candidates": 50
+        "selection_mode": "manual"
+        
     }
 }
 ```
 
-**Checkpoint Ready / Chekpoint Signal** :
+**Trajectory Selection**
+```json
+{
+    "type": "trajectory_selection",
+    "sector_id": 3,
+    "selected_index": 7,
+    "source": "manual"
+}
+```
+
+**Candidates**
+```json
+{
+    "type": "candidates",
+    "sector_id": 3,
+    "candidates": [
+        {"index": 0, "score": 0.81, "trajectory": [[x, y, z], ...]},
+        {"index": 1, "score": 0.76, "trajectory": [[x, y, z], ...]}
+    ]
+}
+```
+
+**Checkpoint Ready / Checkpoint Signal**
 ```json
 {
     "type": "checkpoint_ready",
     "version": 7,
     "path": "checkpoints/model_v7.pt",
+    "checkpoint_type": "full",
     "loss": 0.0234,
     "training_samples": 12500
 }
 ```
 
-**Stats** :
+**Checkpoint Loaded**
+```json
+{
+    "type": "checkpoint_loaded",
+    "version": 7,
+    "success": true,
+    "timestamp": 1722086500.0
+}
+```
+
+**Training Trigger**
+```json
+{
+    "type": "training_trigger",
+    "dataset": "imitation",
+    "map_id": "map_001",
+    "spéificitées?"
+}
+```
+
+**Stats**
 ```json
 {
     "type": "stats",
     "timestamp": 1722086463.0,
     "mode": "adaptation",
     "sector_id": 3,
-    "reward_cumulé": 45.6,
-    "q_value_estime": 0.87,
+    "reward_cumule": 45.6,
     "loss_train": 0.0234,
     "inference_latency_ms": 2.3,
-    "sector_time": 8.34
 }
 ```
 
@@ -1033,16 +1128,16 @@ L'Inference Process lit toujours `version.txt`, puis charge `checkpoints/model_v
 │  LTM-AI Control Center                                   [—] [□] [✕]    │
 ├─────────────────────────────────┬────────────────────────────────────────┤
 │                                 │                                        │
-│  ┌─────────────────────────┐   │  ┌──────────────────────────────────┐  │
-│  │   TELEMETRY LIVE        │   │  │  SECTOR TIMES (last run)         │  │
-│  │                         │   │  │                                  │  │
-│  │  Speed: 142.3 km/h      │   │  │  S1:  8.12s  ████████░░         │  │
-│  │  RPM:   7200            │   │  │  S2:  6.89s  ██████░░░░         │  │
-│  │  Gear: 5                │   │  │  S3: 11.34s  ███████████░       │  │
-│  │  Throttle: ██████░░ 80% │   │  │  S4:  5.67s  █████░░░░░         │  │
-│  │  Steering: █░░░░░░░ 15% │   │  │  S5:  9.21s  █████████░░        │  │
-│  │  Brake:    ░░░░░░░░  0% │   │  │  ─────────────────────────     │  │
-│  │                         │   │  │  Total: 41.23s                 │  │
+│  ┌─────────────────────────┐   │  ┌──────────────────────────────────┐   │ 
+│  │   TELEMETRY LIVE        │   │  │  SECTOR TIMES (last run)         │   │
+│  │                         │   │  │                                  │   │
+│  │  Speed: 142.3 km/h      │   │  │  S1:  8.12s  ████████░░         │   │
+│  │  RPM:   7200            │   │  │  S2:  6.89s  ██████░░░░         │   │
+│  │  Gear: 5                │   │  │  S3: 11.34s  ███████████░       │   │
+│  │  Throttle: ██████░░ 80% │   │  │  S4:  5.67s  █████░░░░░         │   │
+│  │  Steering: █░░░░░░░ 15% │   │  │  S5:  9.21s  █████████░░        │   │
+│  │  Brake:    ░░░░░░░░  0% │   │  │  ─────────────────────────       │  │
+│  │                         │   │  │  Total: 41.23s                   │    │
 │  │  Position: (100.5, 5.2) │   │  │  Best:   38.91s (v5)           │  │
 │  │  Sector: 3/12           │   │  └──────────────────────────────────┘  │
 │  └─────────────────────────┘   │                                        │
