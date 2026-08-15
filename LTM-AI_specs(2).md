@@ -18,10 +18,6 @@
 8. [Gestion des checkpoints](#8-gestion-des-checkpoints)
 9. [GUI DearPyGUI](#9-gui-dearpygui)
 10. [Paramètres de configuration YAML](#10-parametres-de-configuration-yaml)
-11. [Points ouverts — décisions à trancher avant implémentation](#11-points-ouvrets--decisions-a-trancher-avant-implémentation)
-12. [Risques et limites techniques](#12-risques-et-limites-techniques)
-13. [Glossaire](#13-glossaire)
-
 ---
 
 ## 1. Vue d'ensemble du projet et objectifs --------- OK
@@ -607,355 +603,507 @@ Note : pas de champ `timestamps` — le `sample_rate_hz` fixe dans les métadonn
 
 ## 6. Les 4 processus principaux et IPC
 
-### 6.1 Vue d'ensemble de l'architecture multi-processus
+Cette section spécifie l'architecture d'exécution de LTM-AI, agent qui joue à Trackmania 2020, et les contrats d'échange entre ses quatre processus. Les processus sont séparés — il ne s'agit pas de quatre groupes de threads — afin d'isoler les crashs, de permettre le redémarrage indépendant d'un composant et de laisser l'entraînement exploiter les ressources disponibles sans bloquer la boucle de conduite.
 
-L'architecture est composée de **4 processus séparés** qui communiquent via ZeroMQ. Cette séparation en processus (et non en threads) offre une isolation des crashs et permet de paralléliser les calculs (notamment l'entraînement qui est très lourd).
+### 6.1 Vue d'ensemble
 
+Les quatre processus s'exécutent sur une même machine. ZeroMQ transporte les messages de contrôle, d'actions, de supervision et de monitoring. Les données volumineuses ou nécessitant un accès partagé utilisent le MMAP et HDF5 ; les modèles sont échangés par fichiers de checkpoint atomiquement écrits.
+
+```text
+                         Trackmania 2020
+                    Plugin Openplanet / AngelScript
+                         │ TCP : télémétrie
+                         ▲ TCP / vgamepad : actions
+                         │
+┌────────────────────────┴────────────────────────────────────────┐
+│ GIP — Game Interface Process                                    │
+│                                                                 │
+│  PUB telemetry ──────────────┬─────────────────────► INF        │
+│                              └─────────────────────► CC/GUI     │
+│  PULL action  ◄────────────────────────────────────  INF        │
+│  PUB heartbeat ─────────────────────────────────────► CC        │
+└───────────────┬─────────────────────────────────────────────────┘
+                │ MMAP + HDF5 (fichiers, hors ZeroMQ)
+                ▼
+┌────────────────────────────────┐        ┌────────────────────────────────┐
+│ INF — Inference Process        │        │ CC — Control Center            │
+│                                │        │                                │
+│ PUSH action ─────────────► GIP │        │ PUB mode ──────► INF, GIP      │
+│ PUSH inf_stats ───────────► CC │◄───────│ SUB telemetry (direct, GUI)    │
+│ PUB heartbeat ─────────────► CC│        │ REQ/REP map_metadata ◄────► INF│
+└───────────────┬────────────────┘        │ PUSH checkpoint_signal ──► INF │
+                │ checkpoints/*.pt        │ PUSH training_trigger ───► TRN │
+                │ version.txt (lecture)   └───────────────┬────────────────┘
+                │                                          │
+                ▼                                          ▼
+┌────────────────────────────────┐        ┌────────────────────────────────┐
+│ Fichiers modèle                │◄───────│ TRN — Training Process         │
+│ checkpoints/model_v{n}.pt      │        │                                │
+│ checkpoints/mini_v{n}.pt       │        │ PUSH checkpoint_ready ────► CC │
+│ version.txt                    │        │ PUB monitor.training_stats ► CC│
+│ écrit par TRN, lu par INF      │        │ PUB heartbeat ────────────► CC │
+└────────────────────────────────┘        └────────────────────────────────┘
+
+Fichiers partagés (hors ZeroMQ) :
+  /tmp/ltm_telemetry.mmap   GIP écrit → INF lit
+  /data/ltm_sequences.h5    GIP écrit → TRN lit
+  checkpoints/*.pt, version.txt   TRN écrit → INF lit
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                      MACHINE UNIQUE                              │
-│                                                                  │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐      │
-│  │  Process 1     │  │  Process 2     │  │  Process 3     │      │
-│  │  Game Interface│  │  Control Center│  │  Inference     │      │
-│  │                │  │                │  │                │      │
-│  │  - Plugin comm │  │  - GUI         │  │  - Forward pass│      │
-│  │  - Telemetry   │  │  - Mode control│  │  - CEM         │      │
-│  │  - Action send │  │  - Stats       │  │  - Action out  │      │
-│  └───────┬────────┘  └───────┬────────┘  └───────┬────────┘      │
-│          │                   │                   │               │
-│          │   ZeroMQ          │   ZeroMQ          │               │
-│          └───────────────────┴───────────────────┘               │
-│                              │                                   │
-│                      ┌───────┴────────┐                          │
-│                      │  Process 4     │                          │
-│                      │  Training      │                          │
-│                      │                │                          │
-│                      │  - Backward    │                          │
-│                      │  - Checkpoint  │                          │
-│                      └────────────────┘                          │
-│                              │                                   │
-│                      Checkpoint files                            │
-│                      + HDF5 storage                              │
-│                      + MMAP buffer                               │
-└──────────────────────────────────────────────────────────────────┘
-```
 
-### 6.2 Processus 1 — Game Interface Process (GIP)
+**Règles de cadence.** GIP, INF et TRN publient chacun à leur rythme naturel. Aucune cadence fixe n'est imposée aux messages de monitoring ou de statistiques pour satisfaire l'affichage. Le CC met à jour asynchroniquement le dictionnaire mémoire `last_known_state` à chaque message reçu. La GUI se redessine sur un timer indépendant à 10 Hz et relit cet état à chaque tick ; la fréquence de rendu n'est donc pas la fréquence de publication. Un widget peut rester visuellement inchangé plusieurs ticks, notamment pour la loss d'entraînement.
 
-**Rôle** : faire l'interface entre le jeu (Trackmania 2020 via le plugin Openplanet) et le reste du système. C'est le seul processus qui communique directement avec le jeu.
+Les timestamps de trames GIP sont utilisés en interne pour la synchronisation et la détection de drops ; ils ne sont pas écrits dans le HDF5 final. La continuité des `frame_idx` reste vérifiable dans le dataset.
 
-**Sous-composants** :
+### 6.2 Game Interface Process (GIP)
 
-| Sous-composant | Technologie | Description |
-|----------------|-------------|-------------|
-| Telemetry Receiver | Python + socket TCP | Reçoit les trames JSON de télémétrie envoyées par le plugin AngelScript |
-| JSON Parser | Python stdlib | Parse le JSON, valide les champs, converts en numpy arrays |
-| Sync & Timestamp Manager | Python | Gère l'offset entre le timestamp du jeu et le timestamp système, détecte les drops |
-| MMAP Writer | numpy + mmap | Écrit les frames de télémétrie dans le buffer MMAP circulaire |
-| HDF5 Writer | h5py | Flush périodique du MMAP dans le HDF5 (par secteur ou par timer) |
-| Action Sender | Python + socket TCP | Envoie les actions {throttle, steering, brake} au plugin pour injection |
+**Responsabilité.** GIP est le seul processus qui parle directement au jeu. Il reçoit les trames TCP émises par le plugin Openplanet, les valide, les rend disponibles au temps réel et envoie les actions reçues d'INF au jeu.
 
-**Entrées** :
-- Trames de télémétrie depuis le plugin in-game (socket TCP)
-- Actions depuis l'Inference Process (via ZeroMQ PULL)
+| Sous-composant | Technologie | Responsabilité |
+|---|---|---|
+| Telemetry Receiver | socket TCP | Reçoit les trames JSON du plugin AngelScript. |
+| JSON Parser | bibliothèque standard Python | Parse, valide les champs obligatoires et convertit les valeurs vers les types internes/NumPy. |
+| Sync & Timestamp Manager | Python | Estime l'offset entre horloge jeu et horloge système, associe un timestamp interne et détecte les trous de séquence. |
+| MMAP Writer | `numpy` + `mmap` | Écrit chaque frame validée dans le buffer circulaire partagé. |
+| HDF5 Writer | `h5py` | Flushe périodiquement les données persistantes par secteur ou sur timer ; les timestamps internes n'entrent pas dans le HDF5 final. |
+| Action Receiver/Sender | ZeroMQ PULL + TCP/vgamepad | Reçoit les actions INF et les applique à Trackmania via le canal d'entrée configuré. |
+| Telemetry Publisher | ZeroMQ PUB | Publie `telemetry` pour INF et CC/GUI (multi-subscriber). |
 
-**Sorties** :
-- Frames formatées écrites dans le MMAP
-- Logs vers le Control Center via ZeroMQ
+**Entrées :** télémétrie TCP depuis le plugin ; actions `{throttle, steering, brake}` depuis `action` (PUSH/PULL) ; commandes `mode` pour adapter l'enregistrement ou le comportement GIP.
 
-**Fréquence** : 10Hz
+**Sorties :** trames validées dans MMAP, enregistrements HDF5, télémétrie sur `telemetry`, heartbeat sur `process_heartbeat`, actions appliquées au jeu.
 
-**Timestamps** : chaque frame de télémétrie est timestampée pour permettre la détection de drops et la synchronisation avec l'Inference Process. Ces timestamps ne seront pas enregistrer dans le dataset HDF5 final, mais servent uniquement à la détection de drops et à la synchronisation.
+**Cadence :** une itération par trame reçue, nominalement 10 Hz. Cette valeur est la fréquence opérationnelle attendue, pas un mécanisme de throttling artificiel. Aucun drop n'est toléré dans la boucle de collecte : un trou de `frame_idx` est journalisé et signalé. Le watchdog du CC détecte l'absence de heartbeat ou de télémétrie.
 
-**Contraintes temps réel** : ce processus doit tourner sans aucun drop. Une latence ou un drop dans la réception de la télémétrie se traduit directement par une perte de données. Un watchdog monitor (dans le Control Center) détecte si le flux de télémétrie s'interrompt.
+### 6.3 Control Center (CC)
 
-### 6.3 Processus 2 — Control Center Process (CC)
+**Responsabilité.** CC est l'orchestrateur : il reçoit les commandes de la GUI, pilote les transitions de mode, agrège les informations de supervision et décide quand relayer les événements de checkpoint ou déclencher un entraînement.
 
-**Rôle** : orchestrer le système, gérer l'interface graphique, exposer les contrôles utilisateur, centraliser les statistiques.
+| Sous-composant | Technologie | Responsabilité |
+|---|---|---|
+| IPC/Message Poller | ZeroMQ + polling non bloquant | Reçoit les messages des producteurs sans bloquer le rendu. |
+| `last_known_state` | dictionnaire mémoire | Stocke le dernier état connu par source/type de donnée, avec timestamp de réception et, si disponible, timestamp producteur. |
+| Mode Manager | Python | Implémente les transitions entre Repérage, Imitation, Inférence, Adaptation et Record Replay. |
+| GUI | DearPyGUI | Affiche l'état courant ; le rendu est déclenché par un timer indépendant à 10 Hz. |
+| Stats Collector | Python | Normalise et conserve les événements de monitoring pour la session. |
+| Checkpoint Watcher | `watchdog`/polling | Surveille `version.txt` et traite `checkpoint_ready` avant d'émettre `checkpoint_signal`. |
+| Telemetry Watchdog | Python | Détecte l'interruption du flux `telemetry` et/ou du heartbeat GIP. |
+| Process Watchdog | Python | Suit `process_heartbeat` et marque un processus vivant, mort ou en erreur. |
 
-**Sous-composants** :
+**Entrées :** commandes de la GUI ; `telemetry` en abonnement direct pour l'affichage ; canaux `inf_stats`, `monitor.*`, `checkpoint_*`, `candidates` et `process_heartbeat`.
 
-| Sous-composant | Technologie | Description |
-|----------------|-------------|-------------|
-| IPC Server | Python + ZeroMQ REP | Reçoit les commandes de contrôle (changement de mode, reset, quit) depuis la GUI |
-| Mode Manager | Python | Gère les transitions entre modes (Repérage, Imitation, Inférence, Adaptation, Record Replay) |
-| Stats Collector | Python | Agrège les statistiques de tous les processus (loss, reward, sector times, etc.) |
-| GUI (DearPyGUI) | DearPyGUI | Interface graphique principale — see section 9 |
-| Checkpoint Watcher | Python + watchdog | Surveille les changements de version.txt et notifie l'Inference Process |
-| Telemetry Watchdog | Python | Détecte si le flux de télémétrie du Game Interface Process s'interrompt |
+**Sorties :** `mode` vers INF/GIP, `trajectory_selection` vers INF, `checkpoint_signal` vers INF, `training_trigger` vers TRN, requête ponctuelle `map_metadata` vers INF, métriques et alertes à la GUI. Le mode actif affiché peut être servi par l'état local CC : il n'a pas besoin d'un aller-retour réseau.
 
-**Entrées** :
-- Commandes GUI depuis l'opérateur
-- Statuts des autres processus via ZeroMQ
+**Cadence :** réception et mise à jour de `last_known_state` asynchrones, au rythme réel de chaque source. Le timer de rendu GUI est indépendant et fixé à 10 Hz. La sauvegarde des statistiques collectées dans un fichier JSON intervient à la fermeture du CC.
 
-**Sorties** :
-- Commandes de mode vers l'Inference Process et le Game Interface Process
-- Métriques affichées dans la GUI
+### 6.4 Inference Process (INF)
 
-**Fréquence de mise à jour GUI** : 10 Hz 
+**Responsabilité.** INF calcule une action à chaque frame disponible, maintient les embeddings et exécute le CEM en mode Adaptation. Il ne modifie pas le checkpoint partagé en place : il charge une version complète lorsqu'il reçoit le signal du CC.
 
-**Points clés** :
-- Le Control Center est le "chef d'orchestre" : il décide quand changer de mode, quand déclencher un entraînement, quand afficher une alerte.
-- Il reçoit les notifications de checkpoint readiness du Training Process et les转发 à l'Inference Process.
-- Le Mode Manager implémente la logique de transition entre modes (voir section 3.6 pour les règles de transition).
+| Sous-composant | Technologie | Responsabilité |
+|---|---|---|
+| MMAP Reader | `numpy` + `mmap` | Lit les frames récentes et le buffer de condensation voiture. |
+| Embedding Calculator | NumPy + PyTorch | Calcule l'embedding voiture et utilise l'embedding environnement pré-calculé courant. |
+| Forward Pass Engine | PyTorch | Produit l'action de conduite. |
+| Adaptation Module | Python/NumPy | Exécute le CEM et produit les trajectoires candidates et leurs scores. |
+| Checkpoint Loader | PyTorch | Charge `model_v{n}.pt` ou `mini_v{n}.pt` après `checkpoint_signal`. |
+| Action Queue Writer | ZeroMQ PUSH | Envoie les actions à GIP via `action`. |
+| Monitor Publisher | ZeroMQ PUB/PUSH | Publie `inf_stats` (dont `monitor.action`) et `monitor.inference_perf`, ainsi que l'état d'embedding/progression. |
 
-**Sauvegarde des stats** : A sa fermeture, le Control Center sauvegarde toutes les statistiques collectées (dans un fichier JSON ?) pour analyse post-mortem.
+Pour les sous-composant ce sera à vérifier, il y a un peu plus de subtilité et de choses à faire que simplement ces trucs.
 
-### 6.4 Processus 3 — Inference Process (INF)
+**Entrées :** `telemetry` et/ou MMAP ; `mode`, `trajectory_selection`, `checkpoint_signal` ; métadonnées statiques de map via `map_metadata` ; checkpoints sur disque.
 
-**Rôle** : exécuter le modèle de conduite en temps réel, prendre les décisions d'action à chaque frame, exécuter le module CEM en mode Adaptation.
+**Sorties :** `action` vers GIP ; `inf_stats` et les flux logiques `monitor.action`, `monitor.embedding_state`, `monitor.checkpoint_progress`, `monitor.inference_perf` vers CC ; `candidates`, `checkpoint_loaded` et heartbeat.
 
-**Sous-composants** :
+**Cadence :** une décision par frame exploitable, nominalement 10 Hz. `monitor.inference_perf.decision_hz` est mesuré réellement ; il ne doit pas être remplacé par la fréquence configurée. Les publications de monitoring suivent les événements et le rythme naturel d'INF.
 
-| Sous-composant | Technologie | Description |
-|----------------|-------------|-------------|
-| Forward Pass Engine(à préciser) | PyTorch | Exécute le modèle de conduite (inférence) à chaque frame |
-| Embedding Calculator(à préciser) | NumPy + PyTorch | Calcule l'embedding voiture (condensation du buffer MMAP) et l'embedding environnement |
-| MMAP Reader | numpy + mmap | Lit les frames depuis le MMAP pour calculer les embeddings |
-| Adaptation Module | NumPy + Python | Implémente le mode adaptation |
-| Checkpoint Loader | PyTorch | Charge les checkpoints du modèle depuis le disque (watchdog event) |
-| Action Queue Writer | ZeroMQ PUSH | Écrit les actions dans la file d'actions vers le Game Interface Process |
+### 6.5 Training Process (TRN)
 
+**Responsabilité.** TRN entraîne les sous-modèles, lit HDF5, écrit les checkpoints de manière atomique et gère leur version. Il ne prend aucune décision de conduite.
 
-**Entrées** :
-- Frames de télémétrie depuis le MMAP
-- Commandes de mode depuis le Control Center (via ZeroMQ)
-- Signal de nouveau checkpoint (via fichier version.txt)
+| Sous-composant | Technologie | Responsabilité |
+|---|---|---|
+| HDF5 Reader / Data Loader | `h5py` + PyTorch DataLoader | Lit les batches et séquences validées. |
+| Training Loop | PyTorch | Forward, calcul de loss par sous-modèle, backward et optimisation. |
+| Gradient Monitor | PyTorch | Calcule la norme des gradients séparément pour chaque sous-modèle. |
+| Checkpoint Writer | PyTorch + `os.replace` | Écrit `*.tmp`, flush/fsync si configuré, puis renomme atomiquement. |
+| Version Manager | bibliothèque standard | Incrémente et persiste `version.txt`. |
 
-**Sorties** :
-- Actions {throttle, steering, brake} vers le Game Interface Process (via ZeroMQ)
-- Statistiques et infos (à déterminé précisement) vers le Control Center
+**Entrées :** données HDF5 ; modèle du dernier checkpoint au démarrage ; `training_trigger` manuel ou événement d'entraînement orchestré par CC.
 
-**Fréquence** : 10Hz
+**Sorties :** `model_v{n}.pt` et/ou `mini_v{n}.pt`, `version.txt`, `checkpoint_ready`, `monitor.training_stats` et heartbeat.
 
-
-### 6.5 Processus 4 — Training Process (TRN)
-
-**Rôle** : entraîner le modèle sur les données collectées, créer les checkpoints, gérer la versioning du modèle.
-
-**Sous-composants** :
-
-| Sous-composant | Technologie | Description |
-|----------------|-------------|-------------|
-| Data Loader | h5py + PyTorch DataLoader | Charge les batches de données depuis le HDF5 |
-| Training Loop | PyTorch | Backward pass, optimisation, logging |
-| Checkpoint Writer | PyTorch + stdlib | Écrit les checkpoints de manière atomique (fichier .tmp + rename) |
-| Version Manager | stdlib | Incrémente et persiste version.txt |
-| HDF5 Reader | h5py | Lit les données depuis le HDF5 pour constituer les batches |
-
-**Entrées** :
-- Modèle actuel depuis le dernier checkpoint (chargé au démarrage)
-- Données depuis le HDF5
-
-**Sorties** :
-- Fichier checkpoint `model_v{n}.pt`
-- Fichier `version.txt` mis à jour
-- Les statistiques(loss, versions du model, temps de training, etc... à préciser) vers le Control Center
-
-**Fréquence** : déclenché par événements (fin d'un secteur pair en mode Adaptation, ou déclenché manuellement pour réentraînement sur données Imitation).
-
-**Cycle de création de checkpoint** : détaillé en section 8.
+**Cadence :** événementielle. Le rythme est celui des steps/batches d'entraînement et des fins de run/secteur selon le mode ; aucune publication à 10 Hz n'est imposée. Le cycle détaillé de création de checkpoint est spécifié en section 8.
 
 ### 6.6 Schéma complet des canaux ZeroMQ
 
+Les noms historiques sont conservés. `telemetry` est explicitement un vrai PUB multi-subscribers : INF et CC/GUI s'y abonnent. `action` reste un pipeline PUSH/PULL point-à-point vers GIP et n'est pas réutilisé pour l'affichage ; INF republie donc les actions sur `inf_stats` avec le flux logique `monitor.action`.
+
+Les flux `monitor.*` sont des flux logiques. Leur transport recommandé est un canal physique `inf_stats` (PUSH/PULL INF→CC) pour les données INF ; le champ `stream` distingue `monitor.action`, `monitor.embedding_state`, `monitor.checkpoint_progress` et `monitor.inference_perf`. `monitor.training_stats` est publié séparément par TRN afin de préserver son rythme naturel. Si l'implémentation expose des sockets PUB dédiées, les noms logiques restent inchangés.
+
+```text
+GIP ──PUB── telemetry ──SUB──► INF
+                         └────► CC/GUI (abonnement direct)
+INF ──PUSH─ action ─────PULL──► GIP
+CC  ──PUB── mode ───────SUB───► INF, GIP
+CC  ──PUSH─ trajectory_selection ─PULL─► INF
+INF ──PUSH─ candidates ─PULL──────────► CC
+INF ──PUSH─ inf_stats ──PULL──────────► CC
+INF ──PUB── monitor.inference_perf ───► CC  (ou inclus dans inf_stats)
+INF ──PUB── monitor.embedding_state ──► CC  (ou inclus dans inf_stats)
+INF ──PUB── monitor.checkpoint_progress ► CC (ou inclus dans inf_stats)
+TRN ──PUB── monitor.training_stats ────► CC
+GIP, INF, TRN ──PUB── process_heartbeat ─SUB─► CC
+TRN ──PUSH─ checkpoint_ready ─PULL────► CC
+CC  ──PUSH─ checkpoint_signal ─PULL───► INF
+INF ──PUSH─ checkpoint_loaded ─PULL───► CC
+CC  ──PUSH─ training_trigger ─PULL────► TRN
+CC  ◄────────── REQ/REP map_metadata ──────────► INF (une fois par map)
 ```
-                        ZeroMQ IPC Schema
-┌────────────────────────────────────────────────────────────────────┐
-│ GIP ──PUB──► [telemetry] ──SUB──► INF               (PUB/SUB)      │
-│                                                                    │
-│ INF ──PUSH──► [action] ──PULL──► GIP                (PUSH/PULL)    │
-│                                                                    │
-│ CC  ──PUB──► [mode] ──SUB──► INF, GIP                (PUB/SUB)     │
-│                                                                    │
-│ CC  ──PUSH──► [trajectory_selection] ──PULL──► INF   (PUSH/PULL)   │
-│                                                                    │
-│ INF ──PUSH──► [candidates] ──PULL──► CC              (PUSH/PULL)   │
-│                                                                    │
-│ INF, TRN ──PUSH──► [stats] ──PULL──► CC              (PUSH/PULL)   │
-│                                                                    │
-│ TRN ──PUSH──► [checkpoint_ready] ──PULL──► CC        (PUSH/PULL)   │
-│                                                                    │
-│ CC  ──PUSH──► [checkpoint_signal] ──PULL──► INF      (PUSH/PULL)   │
-│                                                                    │
-│ INF ──PUSH──► [checkpoint_loaded] ──PULL──► CC       (PUSH/PULL)   │
-│                                                                    │
-│ CC  ──PUSH──► [training_trigger] ──PULL──► TRN       (PUSH/PULL)   │
-│                                                                    │
-│ Filesystem :                                                       │
-│   /tmp/ltm_telemetry.mmap    ← MMAP partagé par GIP et INF         │
-│   /data/ltm_sequences.h5     ← HDF5 écrit par GIP, lu par TRN      │
-│   checkpoints/model_v{n}.pt  ← écrit par TRN, lu par INF           │
-│   checkpoints/mini_v{n}.pt   ← écrit par TRN, lu par INF           │
-│   version.txt                ← écrit par TRN, lu par INF           │
-└────────────────────────────────────────────────────────────────────┘
-```
----
 
-### 6.7 Détail des files ZeroMQ
+`map_metadata` est un échange ponctuel au chargement de map, pas un flux de monitoring. Il transporte notamment `total_environment_embeddings` et `total_mini_checkpoints`. Ces totaux ne sont jamais répétés dans chaque message d'état courant.
 
-| File | Type | Pattern | Fréquence | Source | Destinataires | Contenu |
-|------|------|---------|-----------|--------|---------------|---------|
-| `telemetry` | PUB/SUB | publish-subscribe | 10 Hz | Game Interface | Inference | `{frame_data, timestamp, sector_id}` |
-| `action` | PUSH/PULL | pipeline | 10 Hz | Inference | Game Interface | `{throttle, steer, brake}` |
-| `mode` | PUB/SUB | publish-subscribe | événement | Control Center | Inference, Game Interface | `{type: "mode_change", mode, params}` |
-| `trajectory_selection` | PUSH/PULL | pipeline | événement (fin de présélection, mode Adaptation manuel) | Control Center | Inference | `{sector_id, selected_index, source}` |
-| `candidates` | PUSH/PULL | pipeline | événement (par secteur, mode Adaptation) | Inference | Control Center | `{sector_id, candidates: [{index, score, trajectory}]}` |
-| `stats` | PUSH/PULL | pipeline | 1 Hz | Inference, Training | Control Center | `{loss, reward, q_value, sector_time}` |
-| `checkpoint_ready` | PUSH/PULL | pipeline | événement | Training | Control Center | `{version, path, type: "full"/"mini", loss, training_samples}` |
-| `checkpoint_signal` | PUSH/PULL | pipeline | événement | Control Center | Inference | `{version, path, type: "full"/"mini"}` |
-| `checkpoint_loaded` | PUSH/PULL | pipeline | événement | Inference | Control Center | `{version, success, timestamp}` |
-| `training_trigger` | PUSH/PULL | pipeline | événement (manuel, opérateur) | Control Center | Training | `{dataset: "imitation"/"adaptation", map_id}` |
+### 6.7 Tableau détaillé de tous les canaux
 
+| Canal | Type / pattern | Fréquence ou déclencheur | Source | Destinataires | Contenu |
+|---|---|---|---|---|---|
+| `telemetry` | PUB/SUB | Chaque trame, nominal 10 Hz | GIP | INF, CC/GUI | Vitesse, RPM, rapport, position, état de run et identifiants ; timestamp interne utile au runtime. |
+| `action` | PUSH/PULL | Chaque décision exploitable | INF | GIP | `throttle`, `steering`, `brake`, identifiants de frame. |
+| `mode` | PUB/SUB | Changement de mode ou paramètres | CC | INF, GIP | Mode actif et paramètres associés. |
+| `trajectory_selection` | PUSH/PULL | Choix manuel, par secteur en Adaptation | CC | INF | Index de trajectoire candidate et origine du choix. |
+| `candidates` | PUSH/PULL | Production d'un lot CEM | INF | CC | Candidats, scores, secteur et trajectoires éventuellement sous-échantillonnées. |
+| `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | CC | Enveloppe de monitoring INF ; `stream` vaut notamment `monitor.action`, `monitor.embedding_state` ou `monitor.checkpoint_progress`. |
+| `monitor.action` | flux logique via `inf_stats` | Après décision, au rythme INF | INF | CC/GUI | Actions destinées à l'affichage, distinctes de `action` jeu. |
+| `monitor.embedding_state` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant d'embedding environnement ; le total vient de `map_metadata`. |
+| `monitor.checkpoint_progress` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant de mini-checkpoint ; le total vient de `map_metadata`. |
+| `monitor.training_stats` | PUB/SUB | Steps/batches ou événements TRN | TRN | CC/GUI | Loss par sous-modèle, norme de gradient par sous-modèle, temps d'entraînement. |
+| `monitor.inference_perf` | flux logique via `inf_stats` (ou PUB dédié) | Mesure/période naturelle INF | INF | CC/GUI | Fréquence de décision mesurée en Hz et délai d'inférence en ms. |
+| `process_heartbeat` | PUB/SUB | Périodique, indépendant du métier | GIP, INF, TRN | CC | Processus vivant, mort ou en erreur, numéro de séquence et dernier état connu. |
+| `checkpoint_ready` | PUSH/PULL | Checkpoint atomiquement disponible | TRN | CC | Version, chemin, type full/mini et contexte de training. |
+| `checkpoint_signal` | PUSH/PULL | Décision d'activation par CC | CC | INF | Checkpoint à charger et politique d'application. |
+| `checkpoint_loaded` | PUSH/PULL | Après tentative de chargement | INF | CC | Version, succès/échec et erreur éventuelle. |
+| `training_trigger` | PUSH/PULL | Manuel ou événement métier | CC | TRN | Dataset, map, sous-modèles et paramètres de run. |
+| `map_metadata` | REQ/REP ponctuel | Chargement/changement de map | CC ↔ INF | CC ↔ INF | `map_id`, fréquence nominale, total d'embeddings, total de mini-checkpoints et identifiant de configuration. |
 
-#### Explication des canaux ZeroMQ explicitement
+Les commandes GUI→CC restent locales au CC lorsque GUI et CC sont intégrés au même processus ; elles ne constituent pas un canal IPC ZeroMQ inter-processus dans cette section.
 
-**`telemetry` (GIP → INF, PUB/SUB)**
-Transporte l'état brut du jeu à chaque frame (position, vitesse, inputs, etc.). C'est la seule source de vérité sur ce qui se passe en jeu ; sans ce canal, INF ne peut ni calculer d'embedding ni décider d'action.
+### 6.8 Explication de chaque canal
 
-**`action` (INF → GIP, PUSH/PULL)**
-Transporte la décision de conduite calculée par INF (throttle, steering, brake) pour injection dans le jeu. C'est le seul canal qui a un effet réel sur la voiture.
+- **`telemetry`** : source de vérité de la télémétrie de jeu. GIP publie une trame et plusieurs abonnés peuvent la recevoir. INF s'en sert pour la décision ; CC/GUI s'abonne directement pour l'affichage de speed, RPM, gear et position, sans relais par CC.
+- **`action`** : pipeline point-à-point ayant un effet sur le jeu. GIP consomme l'action et l'applique ; il ne sert pas à alimenter plusieurs affichages.
+- **`mode`** : diffusion des transitions décidées par CC : Repérage, Imitation, Inférence, Adaptation ou Record Replay, avec les paramètres propres au mode.
+- **`trajectory_selection`** : choix de l'opérateur parmi les candidats CEM. INF l'applique au secteur concerné.
+- **`candidates`** : lot de trajectoires CEM et de scores. CC le conserve pour la GUI et attend, si nécessaire, `trajectory_selection`.
+- **`inf_stats` / `monitor.action`** : INF duplique l'action calculée dans un message d'observation uniquement. Ce flux ne commande jamais le jeu.
+- **`monitor.embedding_state`** : position courante dans la séquence d'embeddings environnement. Le total est une propriété statique de la map, obtenue une seule fois par `map_metadata`.
+- **`monitor.checkpoint_progress`** : mini-checkpoint courant. Son total suit le même mécanisme statique `map_metadata`.
+- **`monitor.training_stats`** : TRN publie les pertes de chaque sous-modèle séparément, les normes de gradients correspondantes et le temps de training. Il n'y a pas de loss globale obligatoire et la cadence n'est pas 10 Hz.
+- **`monitor.inference_perf`** : métriques mesurées par INF, notamment `decision_hz` réel et `inference_latency_ms`.
+- **`process_heartbeat`** : supervision technique séparée des statistiques métier. CC peut déclarer un processus vivant, muet ou en erreur sans déduire cet état d'une loss ou d'une télémétrie.
+- **`checkpoint_ready`** : TRN annonce un fichier terminé et lisible. L'écriture est atomique ; CC peut attendre une frontière sûre avant de signaler INF.
+- **`checkpoint_signal`** : CC ordonne à INF de charger une version précise, éventuellement à la fin du secteur courant.
+- **`checkpoint_loaded`** : INF confirme la réussite ou l'échec du chargement et permet à CC d'alerter l'opérateur.
+- **`training_trigger`** : CC demande à TRN un cycle manuel ou événementiel, par exemple après des données d'Imitation ou un secteur pair d'Adaptation.
+- **`map_metadata`** : échange REQ/REP ponctuel lors du chargement de map. Il évite de répéter les totaux statiques dans les messages de progression. Ce message ce fera après le mode Repérage
 
-**`mode` (CC → INF, GIP, PUB/SUB)**
-Diffuse les changements de mode (Repérage, Imitation, Inférence, Adaptation, Record Replay) et leurs paramètres associés (ex. epsilon du bruit, nombre de candidats CEM, mode de sélection manuel/auto). Permet à CC de piloter le comportement du système sans redémarrer les processus.
+### 6.9 Correspondance entre l'affichage GUI et son origine
 
-**`trajectory_selection` (CC → INF, PUSH/PULL)**
-Utilisé uniquement en mode Adaptation avec sélection manuelle : transmet le choix de l'opérateur parmi les trajectoires candidates proposées pour le secteur en cours.
+| Information affichée | Origine exacte | Canal / état |
+|---|---|---|
+| Mode de jeu actif | État local CC : la GUI a émis ou validé le changement | Aucun canal réseau nécessaire |
+| Télémétrie live : speed, RPM, gear, position | Publication GIP reçue directement par l'abonné GUI/CC | `telemetry` |
+| Actions du modèle | Publication INF dédiée à l'affichage, distincte de l'action jeu | `inf_stats`, flux logique `monitor.action` |
+| N° embedding environnement courant | État publié par INF | `monitor.embedding_state` via `inf_stats` |
+| Total d'embeddings environnement | Métadonnée statique reçue une fois au chargement de map | `map_metadata` |
+| N° mini-checkpoint parcouru courant | État publié par INF | `monitor.checkpoint_progress` via `inf_stats` |
+| Total de mini-checkpoints | Métadonnée statique reçue une fois au chargement de map | `map_metadata` |
+| Loss de chaque sous-modèle | Statistiques TRN, une valeur par sous-modèle | `monitor.training_stats` |
+| Statut des différents processus | Heartbeat technique | `process_heartbeat` |
+| Fréquence de décision réelle du modèle | Mesure INF | `monitor.inference_perf` via `inf_stats` |
+| Délai d'inférence | Mesure INF en millisecondes | `monitor.inference_perf` via `inf_stats` |
+| Norme des différents gradients | Mesure TRN, une norme par sous-modèle | `monitor.training_stats` |
+| Candidats CEM en Adaptation | INF publie les candidats ; CC connaît le mode et affiche conditionnellement | `candidates` + `trajectory_selection` |
+| Runs en Record Replay | Données de run via le canal existant utilisé par l'implémentation Record Replay ; si aucun canal dédié n'est arrêté, ce flux doit être défini avant implémentation (TODO) | Canal Record Replay à définir/réutiliser ; affichage conditionnel selon le mode local CC |
 
-**`candidates` (INF → CC, PUSH/PULL)**
-Envoie les trajectoires candidates générées par le CEM (avec leurs scores) pour affichage dans la GUI, condition nécessaire pour que l'opérateur puisse faire un choix éclairé via `trajectory_selection`.
+La GUI ne traite pas directement un message entrant comme un événement de rendu : le poller met à jour `last_known_state`, puis le timer à 10 Hz relit cet état. L'abonnement direct à `telemetry` est l'exception architecturale de routage demandée pour éviter un round-trip via CC ; son rendu reste timer-driven.
 
-**`stats` (INF, TRN → CC, PUSH/PULL)**
-Centralise les métriques de suivi (loss, reward, latence, temps de secteur) pour affichage et archivage dans la GUI. Purement informatif, n'affecte aucune décision du système.
+### 6.10 Formats JSON des messages
 
-**`checkpoint_ready` (TRN → CC, PUSH/PULL)**
-Notifie qu'un nouveau checkpoint (complet ou mini) a été écrit sur disque et est prêt à être chargé. Déclenche la suite de la chaîne de mise à jour du modèle.
+Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`, `message_id` et `sent_at` sont recommandés sur les messages persistants ou diagnostiqués ; `timestamp` représente l'horloge producteur quand il est disponible. Les timestamps runtime ne doivent pas être interprétés comme des colonnes HDF5 finales.
 
-**`checkpoint_signal` (CC → INF, PUSH/PULL)**
-Ordonne à INF de charger un checkpoint précis. Séparé de `checkpoint_ready` pour que CC garde la main sur *quand* le rechargement a lieu (ex. attendre la fin du secteur en cours plutôt que couper en plein milieu).
+#### `telemetry`
 
-**`checkpoint_loaded` (INF → CC, PUSH/PULL)**
-Confirme que le chargement du checkpoint a réussi (ou échoué). Sans ce retour, CC n'a aucun moyen de détecter un échec de chargement ou un crash d'INF pendant l'opération.
-
-**`training_trigger` (CC → TRN, PUSH/PULL)**
-Déclenche manuellement un entraînement (ex. réentraînement sur données Imitation), en dehors des déclenchements automatiques liés aux événements de secteur en mode Adaptation.
-
-
----
-
-
-
-### 6.8 Format des messages ZeroMQ
-
-**Telemetry**
 ```json
 {
-    "type": "telemetry",
-    "timestamp": 1722086462.034,
-    "map_id": "map_001",
-    "sceenshot": "?",
-    "speed": 45.2,
-    "position": {"x": 100.5, "y": 200.3, "z": 5.0},
-    "steering": -0.12,
-    "throttle": 1.0,
-    "brake": 0.0,
-    "rpm": 6500,
-    "gear": 4,
-    "finished": false
+  "schema_version": 1,
+  "type": "telemetry",
+  "message_id": "gip-00001234",
+  "timestamp": 1722086462.034,
+  "frame_idx": 1234,
+  "map_id": "map_001",
+  "sector_id": 3,
+  "speed": 45.2,
+  "position": {"x": 100.5, "y": 200.3, "z": 5.0},
+  "rpm": 6500.0,
+  "gear": 4,
+  "finished": false
 }
 ```
 
-**Action**
+#### `action` (INF → GIP, pilotage du jeu)
+
 ```json
 {
-    "type": "action",
-    "timestamp": 1722086462.054,
-    "throttle": 1,
-    "steering": -0.08,
-    "brake": 0.0
+  "schema_version": 1,
+  "type": "action",
+  "timestamp": 1722086462.054,
+  "frame_idx": 1234,
+  "throttle": 0.85,
+  "steering": -0.08,
+  "brake": 0.0
 }
 ```
 
-**Mode**
+#### `mode`
+
 ```json
 {
-    "type": "mode_change",
-    "mode": "adaptation",
-    "params": {
-        "selection_mode": "manual"
-        
-    }
+  "schema_version": 1,
+  "type": "mode_change",
+  "mode": "adaptation",
+  "params": {
+    "epsilon_actions": 0.05,
+    "epsilon_goal": 0.1,
+    "cem_iterations": 10,
+    "cem_candidates": 50,
+    "selection_mode": "manual"
+  }
 }
 ```
 
-**Trajectory Selection**
+#### `trajectory_selection`
+
 ```json
 {
-    "type": "trajectory_selection",
-    "sector_id": 3,
-    "selected_index": 7,
-    "source": "manual"
+  "schema_version": 1,
+  "type": "trajectory_selection",
+  "map_id": "map_001",
+  "sector_id": 3,
+  "selected_index": 7,
+  "source": "manual"
 }
 ```
 
-**Candidates**
+#### `candidates`
+
 ```json
 {
-    "type": "candidates",
-    "sector_id": 3,
-    "candidates": [
-        {"index": 0, "score": 0.81, "trajectory": [[x, y, z], ...]},
-        {"index": 1, "score": 0.76, "trajectory": [[x, y, z], ...]}
-    ]
+  "schema_version": 1,
+  "type": "candidates",
+  "map_id": "map_001",
+  "sector_id": 3,
+  "candidates": [
+    {"index": 0, "score": 0.81, "trajectory": [[100.0, 5.0, 2.0], [101.0, 5.1, 2.0]]},
+    {"index": 1, "score": 0.76, "trajectory": [[100.0, 5.0, 2.0], [100.8, 5.4, 2.0]]}
+  ]
 }
 ```
 
-**Checkpoint Ready / Checkpoint Signal**
+#### `inf_stats` / `monitor.action`
+
+`inf_stats` est l'enveloppe physique ; `stream` identifie le flux logique.
+
 ```json
 {
-    "type": "checkpoint_ready",
-    "version": 7,
-    "path": "checkpoints/model_v7.pt",
-    "checkpoint_type": "full",
-    "loss": 0.0234,
-    "training_samples": 12500
+  "schema_version": 1,
+  "type": "inf_stats",
+  "stream": "monitor.action",
+  "timestamp": 1722086462.060,
+  "frame_idx": 1234,
+  "mode": "inference",
+  "action": {"throttle": 0.85, "steering": -0.08, "brake": 0.0}
 }
 ```
 
-**Checkpoint Loaded**
+#### `monitor.embedding_state`
+
 ```json
 {
-    "type": "checkpoint_loaded",
-    "version": 7,
-    "success": true,
-    "timestamp": 1722086500.0
+  "schema_version": 1,
+  "type": "inf_stats",
+  "stream": "monitor.embedding_state",
+  "timestamp": 1722086462.070,
+  "map_id": "map_001",
+  "embedding_index": 12,
+  "changed": true
 }
 ```
 
-**Training Trigger**
+#### `monitor.checkpoint_progress`
+
+Le terme « checkpoint » dans ce flux désigne un mini-checkpoint de progression de map, pas un fichier de modèle.
+
 ```json
 {
-    "type": "training_trigger",
-    "dataset": "imitation",
-    "map_id": "map_001",
-    "spéificitées?"
+  "schema_version": 1,
+  "type": "inf_stats",
+  "stream": "monitor.checkpoint_progress",
+  "timestamp": 1722086462.071,
+  "map_id": "map_001",
+  "mini_checkpoint_index": 37,
+  "changed": true
 }
 ```
 
-**Stats**
+#### `monitor.training_stats`
+
 ```json
 {
-    "type": "stats",
-    "timestamp": 1722086463.0,
-    "mode": "adaptation",
-    "sector_id": 3,
-    "reward_cumule": 45.6,
-    "loss_train": 0.0234,
-    "inference_latency_ms": 2.3,
+  "schema_version": 1,
+  "type": "monitor.training_stats",
+  "timestamp": 1722086465.100,
+  "run_id": "train-0042",
+  "step": 1840,
+  "loss_by_submodel": {
+    "car_encoder": 0.0234,
+    "map_encoder": 0.0181,
+    "policy_network": 0.0312,
+    "world_model_car": 0.0275,
+    "world_model_map": 0.0198
+  },
+  "gradient_norm_by_submodel": {
+    "car_encoder": 0.84,
+    "map_encoder": 0.62,
+    "policy_network": 1.13,
+    "world_model_car": 0.91,
+    "world_model_map": 0.55
+  },
+  "training_elapsed_ms": 8420.0
 }
 ```
 
----
+#### `monitor.inference_perf`
+
+```json
+{
+  "schema_version": 1,
+  "type": "inf_stats",
+  "stream": "monitor.inference_perf",
+  "timestamp": 1722086462.080,
+  "window_size": 100,
+  "decision_hz": 9.87,
+  "inference_latency_ms": 2.31
+}
+```
+
+#### `process_heartbeat`
+
+Chaque processus émet son propre message ; `status` ne décrit pas une statistique métier.
+
+```json
+{
+  "schema_version": 1,
+  "type": "process_heartbeat",
+  "process": "INF",
+  "pid": 4217,
+  "sequence": 908,
+  "sent_at": 1722086462.090,
+  "status": "alive",
+  "last_error": null
+}
+```
+
+Valeurs recommandées de `status` : `alive`, `degraded`, `error`. L'absence de message au-delà du timeout de supervision est traitée par CC comme `dead` ; elle ne nécessite pas que le processus envoie un dernier message.
+
+#### `checkpoint_ready`
+
+```json
+{
+  "schema_version": 1,
+  "type": "checkpoint_ready",
+  "version": 7,
+  "path": "checkpoints/model_v7.pt",
+  "checkpoint_type": "full",
+  "loss_by_submodel": {"policy_network": 0.0234},
+  "training_samples": 12500,
+  "created_at": 1722086500.0
+}
+```
+
+#### `checkpoint_signal`
+
+```json
+{
+  "schema_version": 1,
+  "type": "checkpoint_signal",
+  "version": 7,
+  "path": "checkpoints/model_v7.pt",
+  "checkpoint_type": "full",
+  "apply_policy": "safe_boundary"
+}
+```
+
+#### `checkpoint_loaded`
+
+```json
+{
+  "schema_version": 1,
+  "type": "checkpoint_loaded",
+  "version": 7,
+  "checkpoint_type": "full",
+  "success": true,
+  "timestamp": 1722086502.0,
+  "error": null
+}
+```
+
+#### `training_trigger`
+
+```json
+{
+  "schema_version": 1,
+  "type": "training_trigger",
+  "trigger_id": "trigger-009",
+  "dataset": "imitation",
+  "map_id": "map_001",
+  "submodels": ["policy_network", "car_encoder"],
+  "reason": "manual"
+}
+```
+
+#### `map_metadata` — requête REQ
+
+```json
+{
+  "schema_version": 1,
+  "type": "map_metadata_request",
+  "request_id": "map-meta-001",
+  "map_id": "map_001"
+}
+```
+
+#### `map_metadata` — réponse REP
+
+```json
+{
+  "schema_version": 1,
+  "type": "map_metadata_response",
+  "request_id": "map-meta-001",
+  "map_id": "map_001",
+  "total_environment_embeddings": 48,
+  "total_mini_checkpoints": 192,
+  "sample_rate_hz": 10.0,
+  "metadata_version": 1
+}
+```
+
+Les champs `total_environment_embeddings` et `total_mini_checkpoints` sont des métadonnées statiques de map. Ils sont mis en cache par CC/INF après la réponse ; ils ne doivent pas être ajoutés à chaque message `monitor.embedding_state` ou `monitor.checkpoint_progress`.
+
+
+
+
+
+
 
 ## 7. Pipeline d'entraînement         A REFAIRE
 
