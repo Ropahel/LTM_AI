@@ -436,7 +436,7 @@ Procédure : (1) geler l’activation de la version candidate ; (2) restaurer at
 
 **Résilience** : en cas de crash du Game Interface Process, le buffer MMAP contient les dernières frames. Le Training Process peut détecter un crash (le write_idx ne bouge plus pendant un certain temps) et reprendre proprement.
 
-### 5.2 HDF5 — Stockage permanent des données
+### 5.2 HDF5 — Stockage permanent des données d'entrainement
 
 **Fichier** :
 
@@ -524,6 +524,10 @@ Inconvénients : file d’attente et débit maximal du writer à mesurer ; compl
 
 ### 5.3 Enregistrement des graphiques(des données pour générer les cources aussi) et logs
 
+Le .h5 se chargera donc d'enregistrer les données utilisées pour l'entrainement des sous-modèles. Mais on veut avoir de vraies infos sur ce qui se passe dans le programme. Comment la performance de l'agent évolue au fil du temps, comment s'est déroulé les cycles lorsqu'on était pas là etc...
+
+C'est pour cela qu'à chaque lancement des données supplémentaires seront récoltées. Il sagit du contenue des logs, des graphiques et des données pour produire les graphiques(voir section 9). Ce seront les archives. Pour l'instant au niveau des points il ne sera gardée que les points de loss.
+
 #### 5.3.1 Arborescence
 
 ```
@@ -546,6 +550,8 @@ Trois natures de données, trois traitements distincts. Aucun de ces fichiers ne
 
 Chaque ligne est un objet JSON indépendant :
 
+**A Redefinir quand les logs seront termiénées**
+
 ```json
 {"timestamp": "2026-08-26T18:27:34", "level": "INFO", "process": "TRN", "message": "Chargement version v12"}
 {"timestamp": "2026-08-26T18:27:41", "level": "WARNING", "process": "INF", "message": "Latence ZeroMQ élevée: 340ms"}
@@ -553,60 +559,52 @@ Chaque ligne est un objet JSON indépendant :
 
 ##### Mode opératoire
 
-- Écriture en flux continu, en append, par chaque processus (TRN, INF, GIP) pendant toute la durée du run.
-- Accès concurrent géré soit par verrou fichier, soit par centralisation de l'écriture via GIP si les process ne peuvent pas écrire en parallèle sans collision.
-- Aucune relecture pendant l'exécution, sauf debug manuel (tail -f, ou visualisation live optionnelle côté GUI).
+- Écriture en flux continu, en append, par GIP en même temps que d'écrir les vraies logs dans le GUI.
+- Seule GIP est habilité à écrir dans ce doc. Et personne ne l'ouvrira hormis l'utilisateur après la fermeture du programme.
+- Aucune relecture pendant l'exécution.
 - Un fichier par run : pas de fusion, pas d'agrégation. La rotation se fait naturellement à chaque nouveau lancement.
 - Pas de purge automatique prévue pour l'instant.
 
 #### 5.3.3 Points de loss
 
-**Format : Parquet**, un seul fichier cumulatif pour toute la durée de vie du projet. C'est la source de vérité : toute reconstruction (graphique, analyse, export) doit pouvoir se faire à partir de ce fichier seul.
+**Format : Parquet**, un seul fichier cumulatif pour toute la durée de vie de l'agent. C'est la source de vérité, les constructions de graphiques finaux se feront à partir de ve doc.
 
 Schéma de la table :
 
 | colonne | type | description |
 |---|---|---|
 | step_global | int | index continu croissant, toutes versions confondues |
-| run_id | string | identifiant du run ayant produit le point |
+| mode | string | Le mde je jeux d'où provient les données d'entrainement |
+| map_id | string ou None | identifiant du run ayant produit le point |
 | model_version | string | version du modèle chargée au moment du point |
-| step_in_run | int | step local au run |
-| loss | float | valeur de la loss |
-| timestamp | datetime | horodatage du point |
+| loss_1 | float | valeur de la loss du premier sous-modèle|
+| loss_2 | float | valeur de la loss du deuxième sous-modèle|
+| loss_... | float | valeur de la loss du ... sous-modèle|
 
 ##### Mode opératoire
 
 - Pendant l'exécution, les points sont accumulés en mémoire côté GIP (buffer), pas d'écriture disque intermédiaire immédiate.
 - À la fermeture du run : GIP lit le loss_history.parquet existant (s'il existe), concatène le nouveau bloc de points, réécrit le fichier entier.
-- Au lancement de la GUI : lecture unique complète du fichier pour reconstruire la courbe depuis l'origine.
 - Pas d'écriture ni de lecture à aucun autre moment du cycle de vie.
+- Toutes les loss différentes doivent avoir le même nombre de points, donc si seulement un modèle est entrainé les autres loss resteront fixes sur un point supplémentaires.
+- Si jamais le buffer devient trop volumineux(à déterminer à quel point), il sera possible de vider me buffer et de réécrire le doc pendant que le programme tourne.
 
 #### 5.3.4 Graphiques
 
-**Format : PNG**, un seul fichier réécrit en continu (loss_curve_latest.png). Pas d'historique d'images — l'historique complet des données existe déjà dans loss_history.parquet, qui reste la référence en cas de besoin de régénération ou d'analyse fine.
+**Format : PNG**, un seul fichier réécrit en continu par graphique. Pas d'historique d'images — pour les loss on a le document de points, et pour les autres graphiques on garde juste les immages
 
 ##### Mode opératoire
 
-- La GUI génère et met à jour le graphique en continu pendant son fonctionnement, au fil de l'arrivée des nouveaux points de loss (buffer en mémoire, alimenté en direct par GIP ou par lecture du flux courant).
+- La GUI génère et met à jour les graphiques en continu pendant son fonctionnement, au fil de l'arrivée des nouveaux points (buffer en mémoire, alimenté en direct par GIP ou par lecture du flux courant).
 - Le rafraîchissement visuel à l'écran (ce que voit l'utilisateur dans l'interface) peut être fluide et fréquent, sans contrainte particulière — c'est un rendu en mémoire, pas une écriture disque.
-- L'écriture disque du PNG est throttlée, découplée de l'affichage : par exemple toutes les 5 à 10 secondes, ou tous les 500 points reçus, pas à chaque point. Objectif : éviter des dizaines de milliers d'écritures fichier sur la durée de vie du projet.
+- L'écriture disque du PNG est throttlée, découplée de l'affichage : par exemple toutes les 60 à 90 secondes, ou tous les 500 points reçus, pas à chaque point. Objectif : éviter des dizaines de milliers d'écritures fichier sur la durée de vie du projet.
 - Le fichier est écrasé à chaque sauvegarde, jamais dupliqué ou horodaté.
-- L'image ne doit jamais être considérée comme source de données — en cas de perte du fichier PNG, il doit être intégralement régénérable depuis loss_history.parquet.
-
-#### 5.3.5 Résumé des responsabilités
-
-| Donnée | Écrit par | Quand | Lu par | Quand |
-|---|---|---|---|---|
-| Logs | TRN / INF / GIP | En continu pendant le run | Humain (debug) | À la demande |
-| Points de loss | GIP | À la fermeture du run | GUI | Au lancement |
-| Graphiques | GUI | En continu, throttlé (écriture disque) | Humain (consultation) | À la demande |
 
 ### 5.4 Stockages des poids des modèles
 
 #### 5.4.1 Vue d'ensemble
 
-Une **version** du modèle est un ensemble cohérent de sous-modèles (world_model,
-predictor_a, predictor_b, decision_model, ...) figés à un instant donné.
+Une **version** du modèle est un ensemble cohérent de sous-modèles figés à un instant donné.
 Chaque version est décrite par un fichier JSON qui référence, pour chaque
 composant, le fichier de poids exact à utiliser.
 
@@ -616,34 +614,37 @@ jamais dupliqué : plusieurs fichiers de version peuvent référencer le même
 fichier de poids.
 
 ```
-versions_store/
+versions/
   components/
-    world_model__a1b2c3d4.safetensors
-    world_model__d4e5f6a7.safetensors
-    predictor_a__9f8e7d6c.safetensors
-    predictor_a__11223344.safetensors
-    predictor_b__99887766.safetensors
-    decision_model__aabbccdd.safetensors
+    world_model_car__a1b2c3d4.safetensors
+    world_model_car__d4e5f6a7.safetensors
+    encodeur_car__9f8e7d6c.safetensors
+    encodeur_environement__11223344.safetensors
+    .
+    .
+    .
   versions/
+    .
+    .
+    .
     v012.json
     v013.json
     v014.json
 ```
 
 Politique actuelle : **conservation totale**. Aucune version ni aucun
-composant n'est supprimé automatiquement. Il n'existe pas de dossier
-dédié aux "meilleures" versions — un run de référence est identifié via
-ses métadonnées/métriques stockées ailleurs (module d'évaluation), pas
-par un emplacement physique particulier.
+composant n'est supprimé automatiquement.
 
 #### 5.4.2 Nommage des fichiers de composants
+
+**Indice par version de sous-modèle ou hash ?**
+
 
 ```
 {nom_composant}__{hash_contenu}.safetensors
 ```
 
-- `nom_composant` : identifiant stable du sous-modèle (`world_model`,
-  `predictor_a`, `predictor_b`, `decision_model`, ...).
+- `nom_composant` : identifiant stable du sous-modèle, leur nom.
 - `hash_contenu` : hash SHA-256 tronqué du contenu binaire du state_dict
   sérialisé. Deux composants strictement identiques en contenu produisent
   le même hash et donc le même fichier — c'est ce qui permet la
@@ -656,39 +657,21 @@ par un emplacement physique particulier.
   "version_id": "v014",
   "parent_version": "v013",
   "created_at": "2026-08-26T14:32:10Z",
-  "schema_version": 1,
   "components": {
-    "world_model": {
-      "hash": "d4e5f6a7",
-      "file": "world_model__d4e5f6a7.safetensors"
-    },
-    "predictor_a": {
-      "hash": "11223344",
-      "file": "predictor_a__11223344.safetensors"
-    },
-    "predictor_b": {
-      "hash": "99887766",
-      "file": "predictor_b__99887766.safetensors"
-    },
-    "decision_model": {
-      "hash": "aabbccdd",
-      "file": "decision_model__aabbccdd.safetensors"
-    }
+    "world_model": "world_model__d4e5f6a7.safetensors",
+
+    "predictor_a": "predictor_a__11223344.safetensors",
+
+    "predictor_b": "predictor_b__99887766.safetensors",
+
+    "decision_model": "decision_model__aabbccdd.safetensors"
   },
-  "metadata": {
-    "training_cycles": 1042,
-    "notes": ""
-  }
+  
 }
 ```
 
 Notes sur les champs :
 
-- `schema_version` : version du **format du fichier JSON lui-même** (pas
-  du modèle). Optionnel et non bloquant pour le MVP — utile uniquement si
-  la structure de ce fichier doit évoluer un jour de façon incompatible,
-  pour permettre à un code de détecter un format ancien plutôt que
-  d'échouer silencieusement ou avec une erreur obscure.
 - `parent_version` : traçabilité de la lignée des versions, utile pour le
   débogage et l'analyse de régressions.
 
@@ -708,10 +691,9 @@ sous-modèle (pas un agrégat de tous les sous-modèles). Ce choix permet :
 
 | Garantie | Mécanisme |
 |---|---|
-| Un fichier de version visible est toujours complet (jamais un mélange ancien/nouveau) | Écriture en fichier temporaire `.tmp` puis `os.rename()` atomique vers le nom final |
+| Un fichier de version visible est toujours complet (jamais un mélange ancien/nouveau) | Écriture en fichier final directement |
 | Pas de duplication inutile de poids identiques | Nommage par hash de contenu, réutilisation si le hash existe déjà |
 | Traçabilité de la lignée des versions | Champ `parent_version` |
-| Détection de désynchronisation de format (optionnel) | Champ `schema_version` |
 | Aucune perte de version ou de composant | Politique de conservation totale, aucune suppression automatique |
 
 
@@ -719,26 +701,26 @@ sous-modèle (pas un agrégat de tous les sous-modèles). Ce choix permet :
 
 ### 5.4 Réinitialisation
 
-Action par laquelle on décide de recommencer l'entrainement d'un agent depuis 0, en archivant donc toutes les données spécifiques à l'ancien modèle tout en gardant les données utils tel que le dataset .h5(que ça je crois du coup)
+Il se peut, pour des raisons x ou y, que l'agent actuel n'est plus d'actualité(architecture différente, programmes différents, etc...). Il set donc nécessaire de créer un processus qui permet de préparer le terrain pour un nouvelle agent en entier tout en gardant des données sur les anciens agents pour comparer.
+
+C'est donc ici que vient l'action de Réinitialisation, c'est l'action par laquelle on décide de recommencer l'entrainement d'un agent depuis 0, en archivant donc toutes les données spécifiques à l'ancien modèle tout en gardant les données utils tel que le dataset .h5(que ça je crois du coup).
+
+En d'autres termes, les dataset .h5 seront totalement gardé et utilié pour l'entrainement du prochaine agent. Mais tout ce qui était spécifiques à l'ancien agent sera sauvegardé dans un sous-dossier spécifiquer(je parle de graphiques, des logs, des versions et des sauvegardes de points). Toutes ces données seront enrefistré dans un sous-dossier de `Agent_archives`
 
 ---
 
 ## 6. Les 4 processus principaux et IPC
 
-Cette section spécifie l'architecture d'exécution de LTM-AI, agent qui joue à Trackmania 2020, et les contrats d'échange entre ses quatre processus. Les processus sont séparés — il ne s'agit pas de quatre groupes de threads — afin d'isoler les crashs, de permettre le redémarrage indépendant d'un composant et de laisser l'entraînement exploiter les ressources disponibles sans bloquer la boucle de conduite.
+Cette section spécifie l'architecture d'exécution de LTM-AI  et les contrats d'échange entre ses quatre processus. Les processus sont séparés — il ne s'agit pas de quatre groupes de threads — afin d'isoler les crashs, de permettre le redémarrage indépendant d'un composant et de laisser l'entraînement exploiter les ressources disponibles sans bloquer la boucle de conduite.
 
 ### 6.1 Vue d'ensemble
 
-
-**AJOUTER LES LIAISONS ENTRE LE JEU ET LE GIP**
-**REMETTRE LA CONNECTION DE LA TELEMETRIE VERS GIP, MAIS QUE POUR LA POSITION**
-
-Les quatre processus s'exécutent sur une même machine. ZeroMQ transporte les messages de contrôle, d'actions, de supervision et de monitoring. Les données volumineuses ou nécessitant un accès partagé utilisent le MMAP et HDF5 ; les modèles sont échangés par fichiers de version atomiquement écrits.
+Les quatre processus s'exécutent sur une même machine. ZeroMQ transporte les messages de contrôle, d'actions, de supervision et de monitoring. Les données volumineuses ou nécessitant un accès partagé utilisent le MMAP et HDF5 ; les modèles sont échangés par les fichiers de versions.
 
 ```text
                          Trackmania 2020
                     Plugin Openplanet / AngelScript
-                         │ TCP : télémétrie
+                         │ TCP socket (plugin Openplanet AngelScript) → Telemetry Receiver (GIP)
                          ▲ TCP / vgamepad : actions
                          │
 ┌────────────────────────┴────────────────────────────────────────┐
@@ -746,36 +728,37 @@ Les quatre processus s'exécutent sur une même machine. ZeroMQ transporte les m
 │                                                                 │
 │                                                                 │
 │  PULL action  ◄────────────────────────────────────  INF        │
-│  PUB heartbeat ─────────────────────────────────────► GUI        │
+│  PUB heartbeat ─────────────────────────────────────► CC        │
 └───────────────┬─────────────────────────────────────────────────┘
                 │ MMAP + HDF5 (fichiers, hors ZeroMQ)
                 ▼
 ┌────────────────────────────────┐        ┌────────────────────────────────┐
-│ INF — Inference Process        │        │ GUI — Control Center            │
+│ INF — Inference Process        │        │ CC — Control Center            │
 │                                │        │                                │
 │ PUSH action ─────────────► GIP │        │ PUB mode ──────► INF, GIP      │
-│ PUSH inf_stats ───────────► GUI │◄───────│                                │
-│ PUB heartbeat ─────────────► GUI│        │ REQ/REP map_metadata ◄────► INF│
-└───────────────┬────────────────┘        │ PUSH checkpoint_signal ──► INF │
-                │ /*.pt                   │ PUSH training_trigger ───► TRN │
+│ PUSH inf_stats ───────────► CC │◄───────│                                │
+│ PUB heartbeat ─────────────► CC│        │ REQ/REP map_metadata ◄────► INF│
+└───────────────┬────────────────┘        │ PUSH version_signal ───────► INF │
+                │ checkpoints/*.pt        │ PUSH training_trigger ───► TRN │
                 │ version.txt (lecture)   └───────────────┬────────────────┘
-                │                                          │
-                ▼                                          ▼
+                │                                         │
+                ▼                                         ▼
 ┌────────────────────────────────┐        ┌────────────────────────────────┐
 │ Fichiers modèle                │◄───────│ TRN — Training Process         │
-│ /model_v{n}.pt                 │        │                                │
-│                                │        │ PUSH checkpoint_ready ────► GUI │
-│ version.txt                    │        │ PUB monitor.training_stats ► GUI│
-│ écrit par TRN, lu par INF      │        │ PUB heartbeat ────────────► GUI │
+│ /model_v{n}.safetensor         │        │                                │
+│                                │        │ PUSH version_ready ────────► CC│
+│ version.txt                    │        │ PUB monitor.training_stats ► CC│
+│ écrit par TRN, lu par CC       │        │ PUB heartbeat ────────────► CC │
 └────────────────────────────────┘        └────────────────────────────────┘
 
 Fichiers partagés (hors ZeroMQ) :
-  /tmp/ltm_telemetry.mmap   GIP écrit → INF lit
-  /data/ltm_sequences.h5    GIP écrit → TRN lit
-  /*.pt, version.txt   TRN écrit → INF lit
+  / / .mmap   GIP écrit → INF lit
+  / /ltm_sequences.h5    GIP écrit → TRN lit
+  /*.safetensor, version.txt   TRN écrit → CC lit ; INF charge le chemin
+                                  indiqué par CC dans version_signal
 ```
 
-**Règles de cadence.** GIP, INF et TRN publient chacun à leur rythme naturel. Aucune cadence fixe n'est imposée aux messages de monitoring ou de statistiques pour satisfaire l'affichage. La GUI met à jour asynchroniquement le dictionnaire mémoire à chaque message reçu. La GUI se redessine sur un timer indépendant à 10 Hz et relit cet état à chaque tick ; la fréquence de rendu n'est donc pas la fréquence de publication. Un widget peut rester visuellement inchangé plusieurs ticks, notamment pour la loss d'entraînement.
+**Règles de cadence.** GIP, INF et TRN publient chacun à leur rythme naturel. Aucune cadence fixe n'est imposée aux messages de monitoring ou de statistiques pour satisfaire l'affichage. Le CC met à jour asynchroniquement le dictionnaire mémoire à chaque message reçu. La GUI se redessine sur un timer indépendant à 10 Hz et relit cet état à chaque tick ; la fréquence de rendu n'est donc pas la fréquence de publication. Un widget peut rester visuellement inchangé plusieurs ticks, notamment pour la loss d'entraînement.
 
 Les timestamps de trames GIP sont utilisés en interne pour la synchronisation et la détection de drops ; ils ne sont pas écrits dans le HDF5 final. La continuité des `frame_idx` reste vérifiable dans le dataset.
 
@@ -797,11 +780,11 @@ Les timestamps de trames GIP sont utilisés en interne pour la synchronisation e
 
 **Sorties :** trames validées dans MMAP, enregistrements HDF5, télémétrie sur `telemetry`, heartbeat sur `process_heartbeat`, actions appliquées au jeu.
 
-**Cadence :** une itération par trame reçue, nominalement 10 Hz. Cette valeur est la fréquence opérationnelle attendue, pas un mécanisme de throttling artificiel. Aucun drop n'est toléré dans la boucle de collecte : un trou de `frame_idx` est journalisé et signalé. Le watchdog du GUI détecte l'absence de heartbeat ou de télémétrie.
+**Cadence :** une itération par trame reçue, nominalement 10 Hz. Cette valeur est la fréquence opérationnelle attendue, pas un mécanisme de throttling artificiel. Aucun drop n'est toléré dans la boucle de collecte : un trou de `frame_idx` est journalisé et signalé. Le watchdog du CC détecte l'absence de heartbeat ou de télémétrie.
 
-### 6.3 GUI / Control Center (GUI)
+### 6.3 Control Center (CC)
 
-**Responsabilité.** GUI/Control Center est l’orchestrateur : il reçoit les commandes de l’interface, pilote les transitions de mode, agrège les informations de supervision et décide quand relayer les événements de version ou déclencher un entraînement.
+**Responsabilité.** CC est l'orchestrateur : il reçoit les commandes de la GUI, pilote les transitions de mode, agrège les informations de supervision et décide quand relayer les événements de checkpoint ou déclencher un entraînement.
 
 | Sous-composant | Technologie | Responsabilité |
 |---|---|---|
@@ -810,19 +793,19 @@ Les timestamps de trames GIP sont utilisés en interne pour la synchronisation e
 | Mode Manager | Python | Implémente les transitions entre Repérage, Imitation, Inférence, Adaptation et Record Replay. |
 | GUI | DearPyGUI | Affiche l'état courant ; le rendu est déclenché par un timer indépendant à 10 Hz. |
 | Stats Collector | Python | Normalise et conserve les événements de monitoring pour la session. |
-| version Watcher | `watchdog`/polling | Surveille `version.txt` et traite `version_ready` avant d'émettre `version_signal`. |
+| Checkpoint Watcher | `watchdog`/polling | Surveille `version.txt` et traite `version_ready` avant d'émettre `version_signal`. |
 | Telemetry Watchdog | Python | Détecte l'interruption du flux `telemetry` et/ou du heartbeat GIP. |
 | Process Watchdog | Python | Suit `process_heartbeat` et marque un processus vivant, mort ou en erreur. |
 
 **Entrées :** commandes de la GUI ; canaux `inf_stats`, `monitor.*`, `version_*`, `candidates` et `process_heartbeat`.
 
-**Sorties :** `mode` vers INF/GIP, `version_signal` vers INF, `training_trigger` vers TRN, requête ponctuelle `map_metadata` vers INF, métriques et alertes à la GUI. Le mode actif affiché peut être servi par l'état local GUI : il n'a pas besoin d'un aller-retour réseau.
+**Sorties :** `mode` vers INF/GIP, `trajectory_selection` vers INF, `version_signal` vers INF, `training_trigger` vers TRN, requête ponctuelle `map_metadata` vers INF, métriques et alertes à la GUI. Le mode actif affiché peut être servi par l'état local CC : il n'a pas besoin d'un aller-retour réseau.
 
-**Cadence :** réception et mise à jour de `last_known_state` asynchrones, au rythme réel de chaque source. Le timer de rendu GUI est indépendant et fixé à 10 Hz. La sauvegarde des statistiques collectées dans un fichier JSON intervient à la fermeture du GUI.
+**Cadence :** réception et mise à jour de `last_known_state` asynchrones, au rythme réel de chaque source. Le timer de rendu GUI est indépendant et fixé à 10 Hz. La sauvegarde des statistiques collectées dans un fichier JSON intervient à la fermeture du CC.
 
 ### 6.4 Inference Process (INF)
 
-**Responsabilité.** INF calcule une action à chaque frame disponible, maintient les embeddings et exécute le mode Adaptation. Il ne modifie pas la version partagé en place : il charge une version complète lorsqu'il reçoit le signal du GUI ou de TRN.
+**Responsabilité.** INF calcule une action à chaque frame disponible, maintient les embeddings et exécute le CEM en mode Adaptation. Il ne modifie pas le checkpoint partagé en place : il charge une version complète lorsqu'il reçoit le signal du CC.
 
 | Sous-composant | Technologie | Responsabilité |
 |---|---|---|
@@ -830,92 +813,130 @@ Les timestamps de trames GIP sont utilisés en interne pour la synchronisation e
 | Embedding Calculator | NumPy + PyTorch | Calcule l'embedding voiture et utilise l'embedding environnement pré-calculé courant. |
 | Forward Pass Engine | PyTorch | Produit l'action de conduite. |
 | Adaptation Module | Python/NumPy | Exécute le CEM et produit les trajectoires candidates et leurs scores. |
-| version Loader | PyTorch | Charge `model_v{n}.pt` ou `mini_v{n}.pt` après `checkpoint_signal`. |
+| Checkpoint Loader | PyTorch | Charge `model_v{n}.pt` ou `mini_v{n}.pt` après `version_signal`. |
 | Action Queue Writer | ZeroMQ PUSH | Envoie les actions à GIP via `action`. |
 | Monitor Publisher | ZeroMQ PUB/PUSH | Publie `inf_stats` (dont `monitor.action`) et `monitor.inference_perf`, ainsi que l'état d'embedding/progression. |
 
-Pour les sous-composant ce sera à vérifier, il y a un peu plus de subtilité et de choses à faire que simplement ces trucs.
+Pour les sous-composant ce sera à vérifier, il y a un peu plus de subtilitées et de choses à faire que simplement ces trucs.
 
-**Entrées :** MMAP ; `mode`, `trajectory_selection`, `version_signal` ; métadonnées statiques de map via `map_metadata` ; versions sur disque.
+**Entrées :** MMAP ; `mode`, `trajectory_selection`, `version_signal` ; métadonnées statiques de map via `map_metadata` ; checkpoints sur disque.
 
-**Sorties :** `action` vers GIP ; `inf_stats` et les flux logiques `monitor.action`, `monitor.embedding_state`, `monitor.mini_checkpoint_progress`, `monitor.inference_perf` vers GUI ; `candidates`, `checkpoint_loaded` et heartbeat.
+**Sorties :** `action` vers GIP ; `inf_stats` et les flux logiques `monitor.action`, `monitor.embedding_state`, `monitor.checkpoint_progress`, `monitor.inference_perf` vers CC ; `candidates`, `checkpoint_loaded` et heartbeat.
 
 **Cadence :** une décision par frame exploitable, nominalement 10 Hz. `monitor.inference_perf.decision_hz` est mesuré réellement ; il ne doit pas être remplacé par la fréquence configurée. Les publications de monitoring suivent les événements et le rythme naturel d'INF.
 
 ### 6.5 Training Process (TRN)
 
-**Responsabilité.** TRN entraîne les sous-modèles, lit HDF5, écrit les versions de manière atomique et gère leur version. Il ne prend aucune décision de conduite.
+**Responsabilité.** TRN entraîne les sous-modèles, lit HDF5, écrit les checkpoints de manière atomique et gère leur version. Il ne prend aucune décision de conduite.
 
 | Sous-composant | Technologie | Responsabilité |
 |---|---|---|
 | HDF5 Reader / Data Loader | `h5py` + PyTorch DataLoader | Lit les batches et séquences validées. |
 | Training Loop | PyTorch | Forward, calcul de loss par sous-modèle, backward et optimisation. |
 | Gradient Monitor | PyTorch | Calcule la norme des gradients séparément pour chaque sous-modèle. |
-| version Writer | PyTorch + `os.replace` | Écrit `*.tmp`, flush/fsync si configuré, puis renomme atomiquement. |
+| Checkpoint Writer | PyTorch + `os.replace` | Écrit `*.tmp`, flush/fsync si configuré, puis renomme atomiquement. |
 | Version Manager | bibliothèque standard | Incrémente et persiste `version.txt`. |
 
-**Entrées :** données HDF5 ; modèle de la dernière version au démarrage ; `training_trigger` manuel ou événement d'entraînement orchestré par GUI.
+**Entrées :** données HDF5 ; modèle du dernier checkpoint au démarrage ; `training_trigger` manuel ou événement d'entraînement orchestré par CC.
 
 **Sorties :** `model_v{n}.pt` et/ou `mini_v{n}.pt`, `version.txt`, `version_ready`, `monitor.training_stats` et heartbeat.
 
-**Cadence :** événementielle. Le rythme est celui des steps/batches d'entraînement et des fins de run/secteur selon le mode ; aucune publication à 10 Hz n'est imposée. Le cycle détaillé de création de version est spécifié en section 8.
-
-**Gestion des output :** Pour effectuer la rétropropagation ce sera au Training Process de refaire le Forward Pass pour ensuite calculer les erreurs. L'inference process ne sera pas utilisé pour cela pour des raisons de performance.
+**Cadence :** événementielle. Le rythme est celui des steps/batches d'entraînement et des fins de run/secteur selon le mode ; aucune publication à 10 Hz n'est imposée. Le cycle détaillé de création de checkpoint est spécifié en section 8.
 
 
-### 6.6 Canal Monitor partagé (PUB/SUB)
-
-`Monitor` n’est pas un processus : c’est un canal logique de communication pub/sub partagé entre les quatre processus GIP, INF, TRN et GUI. Une implémentation possible est ZeroMQ XPUB/XSUB, avec topics (`monitor.action`, `monitor.training_stats`, `monitor.inference_perf`, `process_heartbeat`, `monitor.rollback`, etc.). GIP publie les événements de collecte et de persistance (jamais des flux bruts destinés à la GUI) ; INF publie les actions destinées à l’affichage, la progression et les performances ; TRN publie losses, gradients, versions et rollbacks ; GUI s’abonne aux états/agrégats utiles et publie les commandes utilisateur vers son orchestrateur.
-
-Format : enveloppe JSON UTF-8 `{schema_version, type, stream, message_id, sent_at, producer, payload}`. Les topics sont filtrés côté broker/abonné. La télémétrie brute reste dans MMAP/HDF5 et n’est jamais publiée vers GUI ; une métrique agrégée n’est exposée que si elle est définie dans le contrat GUI.
-
-### 6.7 Tableau détaillé de tous les canaux
+### 6.8 Tableau détaillé de tous les canaux
  
 
  **AJOUT DE QUEL PORTS SONT UTILSIES ???!!!**
- **Enlever les messages sur la créations de nouvelles versions vers INF, INF ne recevra que des messages pour lui indiquer de changer de version**
 
 | Canal | Type / pattern | Fréquence ou déclencheur | Source | Destinataires | Contenu |
 |---|---|---|---|---|---|
 | `action` | PUSH/PULL | Chaque décision exploitable, 10Hz normalement | INF | GIP | `throttle`, `steering`, `brake`, identifiants de frame. |
-| `mode` | PUB/SUB | Changement de mode ou paramètres | GUI | INF, GIP | Mode actif et paramètres associés. |
-| `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | GUI | Enveloppe de monitoring INF ; `stream` vaut notamment `monitor.action`, `monitor.embedding_state` ou `monitor.checkpoint_progress`. |
-| `monitor.action` | flux logique via `inf_stats` | Après décision, au rythme INF | INF | GUI | Actions destinées à l'affichage, distinctes de `action` jeu. |
-| `monitor.embedding_state` | flux logique via `inf_stats` | À chaque changement utile | INF | GUI | Index courant d'embedding environnement ; le total vient de `map_metadata`. |
-| `monitor.mini_checkpoint_progress` | flux logique via `inf_stats` | À chaque changement utile | INF | GUI | Index courant de mini-checkpoint ; le total vient de `map_metadata`. |
-| `monitor.training_stats` | PUB/SUB | Steps/batches ou événements TRN | TRN | GUI | Loss par sous-modèle, norme de gradient par sous-modèle, temps d'entraînement. |
-| `monitor.inference_perf` | flux logique via `inf_stats` (ou PUB dédié) | Mesure/période naturelle INF | INF | GUI | Fréquence de décision mesurée en Hz et délai d'inférence en ms. |
-| `process_heartbeat` | PUB/SUB | Périodique, indépendant du métier | GIP, INF, TRN | GUI | Processus vivant, mort ou en erreur, numéro de séquence et dernier état connu. |
-| `version_ready` | PUSH/PULL | version atomiquement disponible | TRN | GUI | Version, chemin, type full/mini et contexte de training. |
-| `version_signal` | PUSH/PULL | Décision d'activation par GUI | GUI | INF | version à charger et politique d'application. |
-| `version_loaded` | PUSH/PULL | Après tentative de chargement | INF | GUI | Version, succès/échec et erreur éventuelle. |
-| `training_trigger` | PUSH/PULL | Manuel ou événement métier | GUI | TRN | Dataset, map, sous-modèles et paramètres de run. |
-| `map_metadata` | REQ/REP ponctuel | Chargement/changement de map | GUI ↔ INF | GUI ↔ INF | `map_id`, fréquence nominale, total d'embeddings, total de mini-checkpoints et identifiant de configuration. |
+| `telemetry` | PUB/SUB | À chaque trame validée, nominalement ~10 Hz | GIP | INF | État lu depuis `VehicleState`, dont `speed`, `rpm`, `gear`, `pos`, `steer`, `gas`, `brake`. |
+| `mode` | PUB/SUB | Changement de mode ou paramètres | CC | INF, GIP | Mode actif et paramètres associés. |
+| `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | CC | Enveloppe de monitoring INF ; `stream` vaut notamment `monitor.action`, `monitor.embedding_state` ou `monitor.checkpoint_progress`. |
+| `monitor.action` | flux logique via `inf_stats` | Après décision, au rythme INF | INF | CC/GUI | Actions destinées à l'affichage, distinctes de `action` jeu. |
+| `monitor.embedding_state` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant d'embedding environnement ; le total vient de `map_metadata`. |
+| `monitor.checkpoint_progress` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant de mini-checkpoint ; le total vient de `map_metadata`. |
+| `monitor.training_stats` | PUB/SUB | Steps/batches ou événements TRN | TRN | CC/GUI | Loss par sous-modèle, norme de gradient par sous-modèle, temps d'entraînement. |
+| `monitor.inference_perf` | flux logique via `inf_stats` (ou PUB dédié) | Mesure/période naturelle INF | INF | CC/GUI | Fréquence de décision mesurée en Hz et délai d'inférence en ms. |
+| `process_heartbeat` | PUB/SUB | Périodique, indépendant du métier | GIP, INF, TRN | CC | Processus vivant, mort ou en erreur, numéro de séquence et dernier état connu. |
+| `version_ready` | PUSH/PULL | Version/checkpoint atomiquement disponible | TRN | CC | Version, chemin, type full/mini et contexte de training. |
+| `version_signal` | PUSH/PULL | Décision d'activation par CC | CC | INF | Version/checkpoint à charger et politique d'application. |
+| `checkpoint_loaded` | PUSH/PULL | Après tentative de chargement | INF | CC | Version, succès/échec et erreur éventuelle. |
+| `training_trigger` | PUSH/PULL | Manuel ou événement métier | CC | TRN | Dataset, map, sous-modèles et paramètres de run. |
+| `map_metadata` | REQ/REP ponctuel | Chargement/changement de map | CC ↔ INF | CC ↔ INF | `map_id`, fréquence nominale, total d'embeddings, total de mini-checkpoints et identifiant de configuration. |
 
-Les commandes GUI→Control Center restent locales au processus GUI lorsque GUI et Control Center sont intégrés au même processus ; elles ne constituent pas un canal IPC ZeroMQ inter-processus dans cette section.
+Les commandes GUI→CC restent locales au CC lorsque GUI et CC sont intégrés au même processus ; elles ne constituent pas un canal IPC ZeroMQ inter-processus dans cette section.
 
-**Explication  de à quoi sert chaque cannal** :
+### 6.8bis Ports utilisés
+
+Les ports ci-dessous sont des **propositions** dans une plage libre d’exemple (`5555–5565`). Ils ne sont pas imposés par une contrainte technique connue et devront être validés par l’utilisateur lors de l’intégration. Les flux logiques `monitor.*` sont regroupés dans le canal physique `inf_stats` lorsqu’ils utilisent cette enveloppe.
+
+| Canal ZeroMQ | Port TCP proposé | Pattern | Liaison | Note |
+|---|---:|---|---|---|
+| `action` | 5555 | PUSH/PULL | INF → GIP | Proposition à valider. |
+| `mode` | 5556 | PUB/SUB | CC → INF, GIP | Proposition à valider. |
+| `inf_stats` (`monitor.*`) | 5557 | PUSH/PULL | INF → CC | Proposition à valider. |
+| `monitor.training_stats` | 5558 | PUB/SUB | TRN → CC | Proposition à valider. |
+| `process_heartbeat` | 5559 | PUB/SUB | GIP, INF, TRN → CC | Proposition à valider. |
+| `version_ready` | 5560 | PUSH/PULL | TRN → CC | Annonce ; CC décide ensuite. |
+| `version_signal` | 5561 | PUSH/PULL | CC → INF | Signal explicite de chargement. |
+| `training_trigger` | 5562 | PUSH/PULL | CC → TRN | Proposition à valider. |
+| `map_metadata` | 5563 | REQ/REP | CC ↔ INF | Proposition à valider. |
+| `telemetry` | 5564 | PUB/SUB | GIP → INF | Proposition à valider. |
+| `trajectory_selection` | 5565 | PUSH/PULL | CC → INF | Proposition à valider. |
+
+
+
+> **Flux de version — règle explicite.** TRN n’envoie jamais directement à INF une notification de nouvelle version. TRN publie `version_ready` vers CC ; le Checkpoint Watcher de CC observe `version.txt`, reçoit cette annonce et décide de l’activation. CC envoie alors `version_signal` à INF avec la version et le chemin à charger, comme si un opérateur avait choisi manuellement une version. INF ne lit jamais `version.txt` périodiquement.
+
+**Explication de l’utilité de chaque canal** :
+
+- **`telemetry`** : diffusion par GIP de la trame validée issue directement de `VehicleState` vers INF. `steer`, `gas` et `brake` sont lus au même niveau que `speed`, `rpm`, `gear` et la position ; ils ne sont pas envoyés séparément par GIP. Ces valeurs représentent l’input tel qu’interprété par le moteur du jeu (vérité terrain), à distinguer de l’action brute envoyée par INF avant application par vgamepad. Il reste à vérifier si le jeu applique une courbe de réponse interne avant de les exposer.
 
 - **`action`** : pipeline point-à-point ayant un effet sur le jeu. GIP consomme l'action et l'applique ; il ne sert pas à alimenter plusieurs affichages.
-- **`mode`** : diffusion des transitions décidées par GUI : Repérage, Imitation, Inférence, Adaptation ou Record Replay, avec les paramètres propres au mode.
+- **`mode`** : diffusion des transitions décidées par CC : Repérage, Imitation, Inférence, Adaptation ou Record Replay, avec les paramètres propres au mode.
 - **`monitor.embedding_state`** : position courante dans la séquence d'embeddings environnement. Le total est une propriété statique de la map, obtenue une seule fois par `map_metadata`.
-- **`monitor.mini_checkpoint_progress`** : mini-checkpoint courant. Son total suit le même mécanisme statique `map_metadata`.
+- **`monitor.checkpoint_progress`** : mini-checkpoint courant. Son total suit le même mécanisme statique `map_metadata`.
 - **`monitor.training_stats`** : TRN publie les pertes de chaque sous-modèle séparément, les normes de gradients correspondantes et le temps de training. Il n'y a pas de loss globale obligatoire et la cadence n'est pas 10 Hz.
 - **`monitor.inference_perf`** : métriques mesurées par INF, notamment `decision_hz` réel et `inference_latency_ms`.
-- **`process_heartbeat`** : supervision technique séparée des statistiques métier. GUI peut déclarer un processus vivant, muet ou en erreur sans déduire cet état d'une loss ou d'une télémétrie.
-- **`version_ready`** : TRN annonce un fichier terminé et lisible. L'écriture est atomique ; GUI peut attendre une frontière sûre avant de signaler INF.
-- **`version_signal`** : GUI ordonne à INF de charger une version précise, éventuellement à la fin du secteur courant.
-- **`version_loaded`** : INF confirme la réussite ou l'échec du chargement et permet à GUI d'alerter l'opérateur.
-- **`training_trigger`** : GUI demande à TRN un cycle manuel ou événementiel, par exemple après des données d'Imitation ou un secteur pair d'Adaptation.
+- **`process_heartbeat`** : supervision technique séparée des statistiques métier. CC peut déclarer un processus vivant, muet ou en erreur sans déduire cet état d'une loss ou d'une télémétrie.
+- **`version_ready`** : TRN annonce à CC un fichier terminé et lisible. L'écriture est atomique ; CC peut attendre une frontière sûre avant de décider d'une activation.
+- **`version_signal`** : CC ordonne à INF de charger une version précise, éventuellement à la fin du secteur courant. INF ne lit jamais `version.txt` périodiquement.
+- **`checkpoint_loaded`** : INF confirme la réussite ou l'échec du chargement et permet à CC d'alerter l'opérateur.
+- **`training_trigger`** : CC demande à TRN un cycle manuel ou événementiel, par exemple après des données d'Imitation ou un secteur pair d'Adaptation.
 - **`map_metadata`** : échange REQ/REP ponctuel lors du chargement de map. Il évite de répéter les totaux statiques dans les messages de progression. Ce message ce fera après le mode Repérage
 
 
 
-La GUI ne traite pas directement un message entrant comme un événement de rendu : le poller met à jour `last_known_state`, puis le timer à 10 Hz relit cet état. La GUI n’est jamais abonnée à `telemetry` et ne reçoit jamais la télémétrie brute ; elle ne consomme que les agrégats explicitement définis dans les topics Monitor.
+La GUI ne traite pas directement un message entrant comme un événement de rendu : le poller met à jour `last_known_state`, puis le timer à 10 Hz relit cet état. L'abonnement direct à `telemetry` est l'exception architecturale de routage demandée pour éviter un round-trip via CC ; son rendu reste timer-driven.
 
-### 6.8 Formats JSON des messages
+### 6.9 Formats JSON des messages
 
 Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`, `message_id` et `sent_at` sont recommandés sur les messages persistants ou diagnostiqués ; `timestamp` représente l'horloge producteur quand il est disponible. Les timestamps runtime ne doivent pas être interprétés comme des colonnes HDF5 finales.
+
+#### `telemetry`
+
+Cette trame est publiée par GIP après validation de la télémétrie reçue du plugin. Les champs `steer`, `gas` et `brake` proviennent directement de `VehicleState`, au même titre que les autres champs d’état.
+
+```json
+{
+  "schema_version": 1,
+  "type": "telemetry",
+  "timestamp": 1722086462.050,
+  "frame_idx": 1234,
+  "speed": 82.4,
+  "rpm": 7140.0,
+  "gear": 5,
+  "pos": {"x": 125.3, "y": 8.1, "z": -42.7},
+  "steer": -0.08,
+  "gas": 0.85,
+  "brake": 0.0
+}
+```
+
+> `steer`, `gas` et `brake` représentent l’input tel qu’interprété par le moteur du jeu (vérité terrain). Ces valeurs sont distinctes de l’action brute envoyée par INF avant application par `vgamepad`. Il faut encore vérifier si le jeu applique une courbe de réponse interne avant de les exposer.
 
 #### `action`
 
@@ -925,9 +946,9 @@ Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`,
   "type": "action",
   "timestamp": 1722086462.054,
   "frame_idx": 1234,
-  "throttle": 1,
+  "throttle": 0.85,
   "steering": -0.08,
-  "brake": 0
+  "brake": 0.0
 }
 ```
 
@@ -957,7 +978,7 @@ Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`,
   "timestamp": 1722086462.060,
   "frame_idx": 1234,
   "mode": "inference",
-  "action": {"throttle": 1, "steering": -0.08, "brake": 0}
+  "action": {"throttle": 0.85, "steering": -0.08, "brake": 0.0}
 }
 ```
 
@@ -975,8 +996,9 @@ Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`,
 }
 ```
 
-#### `monitor.mini_checkpoint_progress`
+#### `monitor.checkpoint_progress`
 
+Le terme « checkpoint » dans ce flux désigne un mini-checkpoint de progression de map, pas un fichier de modèle.
 
 ```json
 {
@@ -1048,16 +1070,16 @@ Chaque processus émet son propre message ; `status` ne décrit pas une statisti
 }
 ```
 
-Valeurs recommandées de `status` : `alive`, `degraded`, `error`. L'absence de message au-delà du timeout de supervision est traitée par GUI comme `dead` ; elle ne nécessite pas que le processus envoie un dernier message.
+Valeurs recommandées de `status` : `alive`, `degraded`, `error`. L'absence de message au-delà du timeout de supervision est traitée par CC comme `dead` ; elle ne nécessite pas que le processus envoie un dernier message.
 
 #### `version_ready`
 
 ```json
 {
   "schema_version": 1,
-  "type": "versions_ready",
+  "type": "version_ready",
   "version": 7,
-  "path": "/model_v7.pt",
+  "path": "checkpoints/model_v7.pt",
   "checkpoint_type": "full",
   "loss_by_submodel": {"policy_network": 0.0234},
   "training_samples": 12500,
@@ -1070,20 +1092,20 @@ Valeurs recommandées de `status` : `alive`, `degraded`, `error`. L'absence de m
 ```json
 {
   "schema_version": 1,
-  "type": "versions_signal",
+  "type": "version_signal",
   "version": 7,
-  "path": "versions/model_v7.pt",
+  "path": "checkpoints/model_v7.pt",
   "checkpoint_type": "full",
   "apply_policy": "safe_boundary"
 }
 ```
 
-#### `versions_loaded`
+#### `checkpoint_loaded`
 
 ```json
 {
   "schema_version": 1,
-  "type": "versions_loaded",
+  "type": "checkpoint_loaded",
   "version": 7,
   "checkpoint_type": "full",
   "success": true,
@@ -1132,7 +1154,8 @@ Valeurs recommandées de `status` : `alive`, `degraded`, `error`. L'absence de m
 }
 ```
 
-Les champs `total_environment_embeddings` et `total_mini_checkpoints` sont des métadonnées statiques de map. Ils sont mis en cache par GUI/INF après la réponse ; ils ne doivent pas être ajoutés à chaque message `monitor.embedding_state` ou `monitor.mini_checkpoint_progress`.
+Les champs `total_environment_embeddings` et `total_mini_checkpoints` sont des métadonnées statiques de map. Ils sont mis en cache par CC/INF après la réponse ; ils ne doivent pas être ajoutés à chaque message `monitor.embedding_state` ou `monitor.checkpoint_progress`.
+
 
 
 
@@ -1455,6 +1478,7 @@ Les contrôles ci-dessous constituent le catalogue fonctionnel initial. Ces 6 ac
 - Charger model
 - Sauvegarder Model (? A  voir)
 - Reinitialisation Total(bouton dangereux, il doit avoir une confirmation et une bonne définition !!!!!)
+
 
 Lorsqu'un paramètre ou une action n'a pas de sens dans le mode actuel, son activation est ignorée : il s'agit d'un **no-op silencieux mais journalisé**. Le GUI ne doit pas interrompre l'utilisateur par une boîte de dialogue pour ce cas nominal ; il publie toutefois dans les logs un événement explicite, avec le mode, l'action, le contexte et la raison de l'ignorance (`no_op_unsupported_mode`). L'état de commande reste observable (`ignored`), afin qu'une automatisation ne puisse pas masquer un comportement inattendu.
 
