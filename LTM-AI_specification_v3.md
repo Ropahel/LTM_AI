@@ -1,6 +1,14 @@
 # LTM-AI — Architecture Système Complète
 
----
+
+
+
+
+
+
+
+
+
 
 ## Table des Matières
 
@@ -299,7 +307,7 @@ Ce mode servira principalement au début, lorsque le modèle débutera son appre
 
 Le mode Adaptation a pour but de permettre au modèle de s'adapter à des circuits inconnus pour à la fois augmenter le niveau générale du modèle mais bien sûr aussi pour rendre le modèle meilleure sur ce circuit. Le mode Adaptation est un mode d'exploration autonome, où le modèle va générer des trajectoires candidates, les évaluer, et mettre à jour ses poids périodiquement pour améliorer sa performance sur le circuit en cours.
 
-### 4.2 Le Mode
+### 4.1 Le Mode
 
 Notre but est donc de sélectioner la "meilleure" trajectoire et d'entrainer le modèle à la reproduire. Mais faire cette méthode sur tout de circuit sera trop coûteaux en temps et très peu efficace. On va donc effectuer cette méthode sur des petites secteur de circuit à la fois.
 Ces secteurs de circuit ne sont pas physique, ils ne sont pas délimités par des barrières physiques mais par des actions.(le nombre d'action entre chaque décision d'embeding goal pour être précis)
@@ -378,7 +386,7 @@ POUR CHAQUE SECTEUR s (délimité par k actions) :
        c. SINON : s = s + 1, retour à l'étape 1 avec comme état de base la fin de la trajectoire i*.    
 ```
 
-### 4.3 Continual Learning, anti-forgetting et rollback automatique
+### 4.2 Continual Learning, anti-forgetting et rollback automatique
 
 Le mode Adaptation ne permet aucune sélection ni veto manuel pendant le run. Le rollback automatique est donc l’unique filet de sécurité. Avant chaque mise à jour, TRN conserve la dernière version stable et un état de référence par map. À chaque fin du mode Adaptation et au prochain mode Inference, le programme comparera les temps avant et après inférence du modèle(sur plusieurs run).
 
@@ -738,7 +746,7 @@ Les quatre processus s'exécutent sur une même machine. ZeroMQ transporte les m
 │ PUSH action ─────────────► GIP │        │ PUB mode ──────► INF, GIP      │
 │ PUSH inf_stats ───────────► CC │◄───────│                                │
 │ PUB heartbeat ─────────────► CC│        │ REQ/REP map_metadata ◄────► INF│
-└───────────────┬────────────────┘        │ PUSH version_signal ───────► INF │
+└───────────────┬────────────────┘        │ PUSH version_signal ──────► INF│
                 │ checkpoints/*.pt        │ PUSH training_trigger ───► TRN │
                 │ version.txt (lecture)   └───────────────┬────────────────┘
                 │                                         │
@@ -774,7 +782,6 @@ Les timestamps de trames GIP sont utilisés en interne pour la synchronisation e
 | MMAP Writer | `numpy` + `mmap` | Écrit chaque frame validée dans le buffer circulaire partagé. |
 | HDF5 Writer | `h5py` | Flushe périodiquement les données persistantes par secteur ou sur timer ; les timestamps internes n'entrent pas dans le HDF5 final. |
 | Action Receiver/Sender | ZeroMQ PULL + TCP/vgamepad | Reçoit les actions INF et les applique à Trackmania via le canal d'entrée configuré. |
-| Telemetry Publisher | ZeroMQ PUB | Envoie `telemetry` pour INF |
 
 **Entrées :** télémétrie TCP depuis le plugin ; actions `{throttle, steering, brake}` depuis `action` (PUSH/PULL) ; commandes `mode` pour adapter l'enregistrement ou le comportement GIP.
 
@@ -847,15 +854,12 @@ Pour les sous-composant ce sera à vérifier, il y a un peu plus de subtilitées
 ### 6.8 Tableau détaillé de tous les canaux
  
 
- **AJOUT DE QUEL PORTS SONT UTILSIES ???!!!**
-
 | Canal | Type / pattern | Fréquence ou déclencheur | Source | Destinataires | Contenu |
 |---|---|---|---|---|---|
 | `action` | PUSH/PULL | Chaque décision exploitable, 10Hz normalement | INF | GIP | `throttle`, `steering`, `brake`, identifiants de frame. |
-| `telemetry` | PUB/SUB | À chaque trame validée, nominalement ~10 Hz | GIP | INF | État lu depuis `VehicleState`, dont `speed`, `rpm`, `gear`, `pos`, `steer`, `gas`, `brake`. |
+| `telemetry` | PUB/SUB | À chaque trame validée, nominalement ~10 Hz | jeux | GIP | État lu depuis `VehicleState`, dont `speed`, `rpm`, `gear`, `pos`, `steer`, `gas`, `brake`. |
 | `mode` | PUB/SUB | Changement de mode ou paramètres | CC | INF, GIP | Mode actif et paramètres associés. |
 | `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | CC | Enveloppe de monitoring INF ; `stream` vaut notamment `monitor.action`, `monitor.embedding_state` ou `monitor.checkpoint_progress`. |
-| `monitor.action` | flux logique via `inf_stats` | Après décision, au rythme INF | INF | CC/GUI | Actions destinées à l'affichage, distinctes de `action` jeu. |
 | `monitor.embedding_state` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant d'embedding environnement ; le total vient de `map_metadata`. |
 | `monitor.checkpoint_progress` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant de mini-checkpoint ; le total vient de `map_metadata`. |
 | `monitor.training_stats` | PUB/SUB | Steps/batches ou événements TRN | TRN | CC/GUI | Loss par sous-modèle, norme de gradient par sous-modèle, temps d'entraînement. |
@@ -876,6 +880,7 @@ Les ports ci-dessous sont des **propositions** dans une plage libre d’exemple 
 | Canal ZeroMQ | Port TCP proposé | Pattern | Liaison | Note |
 |---|---:|---|---|---|
 | `action` | 5555 | PUSH/PULL | INF → GIP | Proposition à valider. |
+| `telemetry` | 5564 | PUB/SUB | Jeux -> GIP | Proposition à valider. |
 | `mode` | 5556 | PUB/SUB | CC → INF, GIP | Proposition à valider. |
 | `inf_stats` (`monitor.*`) | 5557 | PUSH/PULL | INF → CC | Proposition à valider. |
 | `monitor.training_stats` | 5558 | PUB/SUB | TRN → CC | Proposition à valider. |
@@ -884,7 +889,6 @@ Les ports ci-dessous sont des **propositions** dans une plage libre d’exemple 
 | `version_signal` | 5561 | PUSH/PULL | CC → INF | Signal explicite de chargement. |
 | `training_trigger` | 5562 | PUSH/PULL | CC → TRN | Proposition à valider. |
 | `map_metadata` | 5563 | REQ/REP | CC ↔ INF | Proposition à valider. |
-| `telemetry` | 5564 | PUB/SUB | GIP → INF | Proposition à valider. |
 | `trajectory_selection` | 5565 | PUSH/PULL | CC → INF | Proposition à valider. |
 
 
@@ -904,7 +908,7 @@ Les ports ci-dessous sont des **propositions** dans une plage libre d’exemple 
 - **`process_heartbeat`** : supervision technique séparée des statistiques métier. CC peut déclarer un processus vivant, muet ou en erreur sans déduire cet état d'une loss ou d'une télémétrie.
 - **`version_ready`** : TRN annonce à CC un fichier terminé et lisible. L'écriture est atomique ; CC peut attendre une frontière sûre avant de décider d'une activation.
 - **`version_signal`** : CC ordonne à INF de charger une version précise, éventuellement à la fin du secteur courant. INF ne lit jamais `version.txt` périodiquement.
-- **`checkpoint_loaded`** : INF confirme la réussite ou l'échec du chargement et permet à CC d'alerter l'opérateur.
+- **`version_loaded`** : INF confirme la réussite ou l'échec du chargement et permet à CC d'alerter l'opérateur.
 - **`training_trigger`** : CC demande à TRN un cycle manuel ou événementiel, par exemple après des données d'Imitation ou un secteur pair d'Adaptation.
 - **`map_metadata`** : échange REQ/REP ponctuel lors du chargement de map. Il évite de répéter les totaux statiques dans les messages de progression. Ce message ce fera après le mode Repérage
 
@@ -965,22 +969,6 @@ Cette trame est publiée par GIP après validation de la télémétrie reçue du
 }
 ```
 
-
-#### `inf_stats` / `monitor.action`
-
-`inf_stats` est l'enveloppe physique ; `stream` identifie le flux logique.
-
-```json
-{
-  "schema_version": 1,
-  "type": "inf_stats",
-  "stream": "monitor.action",
-  "timestamp": 1722086462.060,
-  "frame_idx": 1234,
-  "mode": "inference",
-  "action": {"throttle": 0.85, "steering": -0.08, "brake": 0.0}
-}
-```
 
 #### `monitor.embedding_state`
 
@@ -1631,9 +1619,9 @@ hdf5: {writer: GIP, swmr: false, flush_every: sector}
 
 ## 11. Precisions techniques et utilitaires
 
-Est ce que c'est possible de faire en sorte que la Gui puisse être par dessus le jeu tout en faisant fonctionner le modèle normalement dans le jeu(genre t'as qu'une seule fenêtre et t'es minable)
+- Est ce que c'est possible de faire en sorte que la Gui puisse être par dessus le jeu tout en faisant fonctionner le modèle normalement dans le jeu(genre t'as qu'une seule fenêtre et t'es minable)
 
-Comment tester chaque trajectoire réellement dfe façon fiable pour le mode adaptation ?
+- Comment tester chaque trajectoire réellement dfe façon fiable pour le mode adaptation ?
 
 - Définir le mécanisme technique précis et la fiabilité du plugin TMX et de la macro de chargement de map ; cette dépendance tierce reste un risque de rupture lors d'une mise à jour de Trackmania 2020 ou du plugin et doit faire l'objet de tests et d'un plan de repli.
 
@@ -1643,6 +1631,8 @@ Comment tester chaque trajectoire réellement dfe façon fiable pour le mode ada
 
 - Quand le programme est fermée(proprement), enregistrer les données du lancement dans des doc pour pouvoir les revoir après.(genre quel modèle a fait le meilleure temps sur chaque map, les graphes, les logs etc...)
 
-- Comment faire en sorte de récolter les données au bon moment, c'est à dire de ne pas avoir des screenshots avec le menu de pb dans trackmania, ou avec la GUI. Comment faire en sorte de prendre la bonne séquence de screenshot pour le repérage? 
+- Comment faire en sorte de récolter les données au bon moment, c'est à dire de ne pas avoir des screenshots avec le menu de pb dans trackmania, ou avec la GUI. Comment faire en sorte de prendre la bonne séquence de screenshot pour le repérage?
+
+- Comment assurer la syncronisation temporel des actions, télémétries, dxcam?(on fera des test et après on verra)
 
 ## 12. Glossaire
