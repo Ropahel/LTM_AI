@@ -1,0 +1,72 @@
+# LTM-AI environment and Trackmania runtime configuration
+# Contracts for game telemetry, map loading, screenshots and replay context.
+schema_version: 1
+
+environment:
+  game:
+    name: "Trackmania 2020"
+    plugin:
+      name: "Openplanet"
+      scripting_language: "AngelScript"
+    interface:
+      kind: "GUI above game"
+      borderless_window: true
+      capture_input: true
+      capture_screen: true
+      separate_gui_fallback: true
+    map:
+      source: "TMX"
+      id_field: "map_id"
+      load_timeout_s: 30
+      retry_policy:
+        enabled: true
+        max_retries: null
+        retry_delay_s: null
+      failure_state: "map_load_failed"
+
+  telemetry:
+    sample_rate_hz: 10
+    frame_stride: null
+    fields:
+      - speed
+      - gear
+      - rpm
+      - throttle
+      - brake
+      - steering
+      - position_3d
+      - distance_to_finish
+      - phase_state
+      - respawn_state
+      - screenshot_path
+      - input_history
+
+  capture:
+    screenshot:
+      enabled: true
+      source: "game_window"
+      output_format: "png"
+      reject_frames_when:
+        - menu_active
+        - pause_active
+        - overlay_visible
+        - race_finished
+        - respawn_detected
+
+  replay:
+    record_input_from: "human_displayed_plugin"
+    replay_format: "credule"
+    no_gbx_replay_compat: true
+
+  reconnaissance:
+    goal: "collect screenshots and 3d positions to build environment embeddings"
+    validation_required_before_storage: true
+    overwrite_previous_recon_run: true
+    allow_multiple_runs_before_validation: true
+
+  map_progression:
+    mini_checkpoint_spacing: null
+    embedding_segment_duration_s: 2.0
+    embedding_tokens_per_map: null
+    embedding_refresh_policy: "on_mini_checkpoint"
+

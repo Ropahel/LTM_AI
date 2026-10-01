@@ -1,0 +1,84 @@
+# LTM-AI runtime configuration
+# Generated from the specification and architecture contract.
+schema_version: 1
+project:
+  name: "LTM-AI"
+  objective: "Latent Trackmania AI"
+  language: "Python"
+  framework: "PyTorch"
+  ipc: "ZeroMQ"
+  storage: "MMAP + HDF5"
+
+runtime:
+  mode: "reconnaissance"
+  mode_order:
+    - reconnaissance
+    - record_replay
+    - imitation
+    - adaptation
+    - inference
+  decision_rate_hz: 10
+  decision_rate_target_hz: 10
+  max_enabled_modes: 5
+  training_enabled: true
+  inference_enabled: true
+  drive_training_enabled: true
+  allow_training_while_inference_active: false
+  run_only_between_runs: true
+  local_training: true
+  sequential_training: true
+  trn_lock_name: "LTM-AI_TRNLock"
+
+processes:
+  control_center:
+    enabled: true
+    heartbeat_interval_s: 1.0
+  game_interface:
+    enabled: true
+    receives_actions: true
+    writes_telemetry: true
+    writes_screenshots: true
+    writes_mmap: true
+  inference:
+    enabled: true
+    reads_mmap: true
+    emits_action: true
+    emits_monitoring: true
+  training:
+    enabled: true
+    local: true
+    sequential: true
+    run_only_between_runs: true
+    allow_while_inference_active: false
+    checkpoint_policy: "atomic_replace"
+
+cycles:
+  adaptation:
+    continuation_window_s: 7.0
+    sector_rollout_window_s: null
+    rollback_on_regression: true
+    reject_on_degradation: true
+  failure:
+    map_load_retry: null
+    map_load_timeout_s: 30
+    pause_on_repeated_failure: true
+
+quality:
+  monitor:
+    decision_hz_metrics: true
+    latency_ms_metrics: true
+    embedding_state_metrics: true
+    gate_progress_metrics: true
+  watchdog:
+    enabled: true
+    allow_missing_write_timeout_s: null
+
+logging:
+  level: "INFO"
+  archive:
+    path: "archives/logs"
+    format: "jsonl"
+  metrics:
+    path: "archives/metrics"
+    format: "parquet"
+

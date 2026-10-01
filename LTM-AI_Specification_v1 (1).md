@@ -152,21 +152,23 @@ LTM-AI/
 ├── README.md
 ├── .gitignore
 ├── pyproject.toml
+├── requirements.txt / .lock
 │
 ├── configs/
-│   ├── runtime.yaml          # mode actif, drapeaux globaux, watchdog
-│   ├── action.yaml           # contrat de forme des actions (§1.6)
-│   ├── adaptation.yaml       # paramètres CEM, paliers de rollback, paliers de dégradation
-│   ├── storage.yaml          # chemins MMAP/HDF5/versions/archives
-│   └── gui.yaml              # layout, thèmes, raccourcis clavier
+│   ├── runtime.yaml           # paramètres moteur, process, mode et watchdog
+│   ├── environment.yaml       # Trackmania, Openplanet, capture écran, repérage et map loading
+│   ├── action.yaml            # contrat de forme des actions (§1.6)
+│   ├── models.yaml            # sous-modèles, embeddings et contrat de sortie
+│   ├── adaptation.yaml        # CEM, continuation, rollback et dégradation
+│   ├── storage.yaml           # chemins MMAP/HDF5/versions/archives/datasets
+│   └── gui.yaml               # DearPyGUI, layout, onglets, raccourcis clavier
 │
 ├── data/
 │   ├── runtime/
 │   │   ├── ltm_runtime.mmap        # buffer circulaire écrit par GIP, lu par INF
 │   │   └── ltm_runtime.mmap.meta   # header : N frames, stride, version layout
 │   ├── datasets/
-│   │   └── ltm_sequences_1.h5        # dataset hiérarchique (§5.2)
-|   |   └── ltm_sequences_2.h5 … ltm_sequences_N.h5
+│   │   └── ltm_sequences_1.h5       # dataset hiérarchique (§5.2)
 │   └── versions/
 │       ├── components/             # fichiers {nom}__{hash}.safetensors
 │       │   └── *.safetensors
@@ -174,64 +176,59 @@ LTM-AI/
 │           └── v001.json … v{N}.json
 │
 ├── archives/                       # données d'observation de chaque lancement
-│   ├── logs/
-│   │   └── run_YYYYMMDD_HHMMSS.jsonl
-│   ├── metrics/
-│   │   └── loss_history.parquet
-│   └── plots/
-│       └── loss_curve_latest.png
+│   ├── loss_history.parquet
+|   └── Lancement_YYYYMMDD_HHMMSS/
+|       ├── logs.jsonl
+|       └── plots/
+|           └── loss_curve_latest.png
 │
 ├── agents_archives/                # snapshot par réinitialisation d'agent (§5.5)
-│   └── agent_YYYYMMDD_HHMMSS/
-│       ├── versions/
-│       ├── logs/
-│       ├── metrics/
-│       └── plots/
-│
+│   └── agent_1/
+│       A DEFINIR ULTERIEUREMENT
+│       
 ├── src/
-│   └── ltm_ai/
-│       ├── __init__.py
-│       ├── common/
-│       │   ├── action_space.py     # Action dataclass + validation
-│       │   ├── ipc_schemas.py      # constantes et schémas JSON (§6.8)
-│       │   ├── ipc_topics.py       # noms de canaux, ports
-│       │   ├── locks.py            # TRNLock global
-│       │   └── paths.py            # résolution des chemins versionnés
-│       ├── gip/                    # Game Interface Process
-│       │   ├── __main__.py
-│       │   ├── telemetry_receiver.py
-│       │   ├── action_sender.py
-│       │   ├── mmap_writer.py
-│       │   ├── hdf5_writer.py
-│       │   └── sync_manager.py
-│       ├── cc/                     # Control Center + GUI
-│       │   ├── __main__.py
-│       │   ├── poller.py
-│       │   ├── mode_manager.py
-│       │   ├── watchdog.py
-│       │   ├── cycle_program.py
-│       │   ├── version_watcher.py
-│       │   ├── stats_collector.py
-│       │   └── gui/
-│       │       ├── app.py
-│       │       ├── top_bar.py
-│       │       ├── left_column.py
-│       │       └── right_column.py
-│       ├── inf/                    # Inference Process
-│       │   ├── __main__.py
-│       │   ├── mmap_reader.py
-│       │   ├── embedding.py
-│       │   ├── forward.py
-│       │   ├── cem.py
-│       │   ├── version_loader.py
-│       │   └── perf_monitor.py
-│       └── trn/                    # Training Process (local, séquentiel)
-│           ├── __main__.py
-│           ├── data_loader.py
-│           ├── losses.py
-│           ├── training_loop.py
-│           ├── version_writer.py
-│           └── version_manager.py
+|   ├── __init__.py
+│   ├── common/
+│   │   ├── action_space.py     # Action dataclass + validation
+│   │   ├── ipc_schemas.py      # constantes et schémas JSON (§6.8)
+│   │   ├── ipc_topics.py       # noms de canaux, ports
+│   │   ├── locks.py            # TRNLock global
+│   │   └── paths.py            # résolution des chemins versionnés
+│   ├── gip/                    # Game Interface Process
+│   │   ├── __main__.py
+│   │   ├── telemetry_receiver.py
+│   │   ├── action_sender.py
+│   │   ├── mmap_writer.py
+│   │   ├── hdf5_writer.py
+│   │   └── sync_manager.py
+│   ├── cc/                     # Control Center + GUI
+│   │   ├── __main__.py
+│   │   ├── poller.py
+│   │   ├── mode_manager.py
+│   │   ├── watchdog.py
+│   |   ├── cycle_program.py
+│   │   ├── version_watcher.py
+│   │   ├── stats_collector.py
+│   │   └── gui/
+│   │       ├── app.py
+│   │       ├── top_bar.py
+│   │       ├── left_column.py
+│   │       └── right_column.py
+│   ├── inf/                    # Inference Process
+│   │   ├── __main__.py
+│   │   ├── mmap_reader.py
+│   │   ├── embedding.py
+│   │   ├── forward.py
+│   │   ├── cem.py
+│   │   ├── version_loader.py
+│   │   └── perf_monitor.py
+│   └── trn/                    # Training Process (local, séquentiel)
+│       ├── __main__.py
+│       ├── data_loader.py
+│       ├── losses.py
+│       ├── training_loop.py
+│       ├── version_writer.py
+│       └── version_manager.py
 │
 ├── tests/
 │   ├── test_action_space.py
@@ -248,7 +245,7 @@ LTM-AI/
 
 ### 1.6 Convention de notation des actions
 
-Une seule notation canonique est utilisée dans tout le document, le code, l'IPC, le stockage HDF5 et la configuration. Cette convention est **verrouillée** : toute déviation est un bug.
+Une seule notation canonique est utilisée dans tout le document, le code, l'IPC, le stockage HDF5 et la configuration.
 
 #### Forme canonique
 
@@ -257,17 +254,10 @@ Une action est un tuple ordonné `(steer, gas, brake)` :
 | Champ | Type | Domaine | Sémantique |
 |---|----|----------|-----------|
 | `steer` | `float32` | `[-1.0, +1.0]` (continu) | `-1.0` = braquage maximal à gauche, `+1.0` = braquage maximal à droite |
-| `gas` | `int8` | `{0, +1}` (discret) | `0` = neutre, `+1` = avance |
+| `gas` | `int8` | `{0, 1}` (discret) | `0` = neutre, `1` = avance |
 | `brake` | `uint8` | `{0, 1}` (discret) | `0` = pas de frein, `1` = frein enclenché/recule |
 
 **Petite Precision**: Dans Trackmania, le brack et la marche arrière sont la même action. Donc le signale de brake est utilisé pour les deux. Le gas est uniquement pour avancer.
-
-Cette notation est strictement celle utilisée par :
-
-- la sortie du sous-modèle **Action Model** (§2.2.4) ;
-- les messages JSON `action` sur le canal PUSH/PULL (§6.8) ;
-- la colonne `actions` du HDF5 (§5.2) ;
-- le contenu du fichier `action.yaml` (§10).
 
 #### Action injectée vs action observée
 
@@ -275,13 +265,6 @@ Deux grandeurs distinctes sont tracées en parallèle :
 
 - **Action injectée** : `a_inj = (steer, gas, brake)` produite par INF, publiée sur le canal `action`, reçue par GIP et appliquée au jeu via vgamepad. C'est l'intention de l'agent.
 - **Action observée** : `a_obs = (steer, gas, brake)` lue depuis le `VehicleState` du jeu et publiée par GIP dans le canal `telemetry`. C'est la **vérité terrain** : ce que le jeu a effectivement appliqué après sa courbe de réponse interne (à valider expérimentalement).
-
-Un écart entre `a_inj` et `a_obs` est un signal de diagnostic : il peut signaler une courbe de réponse du jeu non triviale, une trame perdue ou un canal saturé.
-
-#### Contraintes de contrat
-
-- Toute action traversant un canal IPC, un dataset HDF5 ou un fichier de version **doit** valider `steer ∈ [-1, 1]`, `gas ∈ {0, 1}`, `brake ∈ {0, 1}`. Une violation déclenche un événement `monitor.action_contract_violation` et la valeur est clampée avec journalisation.
-- L'entraînement du Modèle Action (§2.2.4, §7.5) est mixte (continu + catégoriel) : la formulation retenue sera tranchée empiriquement (cf. §7.5).
 
 ---
 
@@ -323,23 +306,23 @@ Le détail exact de chaque sous-modèle (architecture, hyperparamètres, taille 
 - **Entrée** :
   - les **N dernières frames de télémétrie** `(speed, gear, rpm, action observée)` : tenseur `(N, 4)` ;
   - les **N derniers screenshots** : tenseur `(N, H, W, C)` en `uint8` ou `float32` après normalisation.
-- **Sortie** : un vecteur d'embedding de **dimension fixe** `D_car` représentant l'état récent de la voiture, incluant la composante visuelle condensée.
+- **Sortie** : un vecteur d'embedding de dimension `D_car` représentant l'état récent de la voiture.
 - **Forme du tenseur de sortie** : `(D_car,)`, `float32`.
-- **Architecture** : CNN pour les screenshots + MLP pour la télémétrie, fusion des deux via concaténation et passage par un MLP final. Une variante à base de Transformer spatial-temporel est envisageable et sera tranchée empiriquement.
+- **Architecture** : 
 
 #### 2.2.2 Sous-modèle « Map Encoder »
 
 - **Entrée** : les screenshots du segment de map correspondant à l'embedding environnement à calculer, tenseur `(M, H, W, C)` en `uint8`.
-- **Sortie** : un vecteur d'embedding de **dimension fixe** `D_map` représentant l'environnement.
+- **Sortie** : un vecteur d'embedding de dimension `D_map` représentant l'environnement.
 - **Forme du tenseur de sortie** : `(D_map,)`, `float32`.
-- **Architecture** : CNN pour les screenshots, éventuellement avec attention spatiale pour se concentrer sur les éléments pertinents (virages, obstacles, etc.).
+- **Architecture** : 
 
 #### 2.2.3 Sous-modèle « Goal Model »
 
 - **Entrée** : l'embedding voiture courant `(D_car,)`, l'embedding environnement courant `(D_map,)` et l'embedding environnement suivant `(D_map,)`.
-- **Sortie** : un vecteur d'embedding de **dimension fixe** `D_goal` représentant le « goal » ou l'objectif à atteindre pour la voiture dans le contexte de l'environnement après K étapes.
+- **Sortie** : un vecteur d'embedding de dimension `D_goal` représentant le « goal » ou l'objectif à atteindre pour la voiture dans le contexte de l'environnement après K étapes.
 - **Forme du tenseur de sortie** : `(D_goal,)`, `float32`.
-- **Architecture** : MLP ou Transformer pour fusionner les embeddings et produire un embedding de goal.
+- **Architecture** : 
 
 #### 2.2.4 Sous-modèle « Action Model »
 
@@ -348,28 +331,28 @@ Le détail exact de chaque sous-modèle (architecture, hyperparamètres, taille 
   - `steer` continu ∈ `[-1, 1]`, `float32` ;
   - `gas` discret ∈ `{0, 1}`, `int8` ;
   - `brake` discret ∈ `{0, 1}`, `uint8`.
-- **Forme du tenseur de sortie** : tuple `(steer, gas, brake)` de types hétérogènes.
-- **Architecture** : MLP ou Transformer pour fusionner les embeddings et produire les actions. La formulation CEM-compatible avec sortie mixte est un point technique ouvert traité au §7.5.
+- **Forme du tenseur de sortie** : tuple `(steer, gas, brake)`
+- **Architecture** : 
 
 #### 2.2.5 Sous-modèle « World Model Car »
 
 - **Entrée** : l'embedding voiture courant `(D_car,)`, l'embedding environnement `(D_map,)`, l'avancement dans l'embedding environnement (scalaire `float32 ∈ [0, 1]` représentant la proportion de gates parcourues sur la totalité de celles qui délimitent l'embedding environnement courant) et les actions prévues pour la prochaine frame `(steer, gas, brake)`.
 - **Sortie** : l'embedding voiture prédit pour la prochaine frame `(D_car,)`, `float32`.
-- **Architecture** : MLP ou Transformer pour prédire l'état futur de la voiture à partir de son état courant et des actions prévues.
+- **Architecture** : 
 
 #### 2.2.6 Sous-modèle « World Model Map »
 
 - **Entrée** : l'embedding environnement courant `(D_map,)` et la prochaine frame (screenshot `(H, W, C)`).
 - **Sortie** : l'embedding environnement prédit pour la prochaine frame `(D_map,)`, `float32`.
-- **Architecture** : MLP ou Transformer.
+- **Architecture** : 
 
-**Note importante** : dans un vrai circuit, les embeddings environnement ne changent pas à chaque frame, mais seulement quand la voiture franchit une gate. Cependant, pour l'entraînement du modèle, on fait en sorte que le modèle prédise l'embedding environnement à chaque frame, même s'il ne change pas. Ainsi le modèle peut apprendre à prédire l'embedding environnement futur, et pas seulement celui qui est associé à la gate courante. Ce sous-modèle sera utilisé principalement pour l'entraînement de l'encodeur.
+**Note importante** : dans un vrai circuit, les embeddings environnement ne changent pas à chaque frame, mais seulement quand la voiture franchit la dernière gate associé à l'mbeding environnement actuel. Cependant, pour l'entraînement du modèle, on fait en sorte que le modèle prédise l'embedding environnement à chaque frame, même s'il ne change pas. Ainsi le modèle peut apprendre à prédire l'embedding environnement futur, et pas seulement celui qui est associé à la gate courante. Ce sous-modèle sera utilisé principalement pour l'entraînement de l'encodeur.
 
 #### 2.2.7 Sous-modèle « Prédicteur gate »
 
 - **Entrée** : l'embedding voiture courant `(D_car,)`, l'embedding environnement courant `(D_map,)` et l'embedding environnement suivant `(D_map,)`.
 - **Sortie** : un scalaire entier qui représente le nombre de gates franchies depuis le début de l'embedding environnement courant (entier).
-- **Architecture** : MLP ou Transformer.
+- **Architecture** :
 
 **Purpose** : permettre d'effectuer un suivi des embeddings environnement sans dépendre des gates, ce qui pourra éventuellement permettre d'effectuer le mode Adaptation sans le jeu (un peu comme du planning).
 
@@ -377,7 +360,7 @@ Le détail exact de chaque sous-modèle (architecture, hyperparamètres, taille 
 
 - **Entrée** : les embeddings voiture générés à la fin du mode Adaptation (avant les 7 secondes de continuation), l'embedding environnement courant et l'embedding environnement futur.
 - **Sortie** : l'indice de la « meilleure » embedding parmi ceux proposés (entier).
-- **Architecture** : MLP ou Transformer.
+- **Architecture** : 
 
 **Purpose** : permettre de sélectionner la meilleure trajectoire parmi celles générées par le mode Adaptation, sans action humaine pendant le run ni les 7 secondes de continuation (voir §4). Cela pourrait aussi permettre d'effectuer le mode Adaptation en planning, c'est-à-dire hors du jeu et ainsi sans la contrainte de temps réel.
 
@@ -608,7 +591,6 @@ POUR CHAQUE SECTEUR s (délimité par k actions) :
 │   (Game Interface Process)                                  │
 │                                                             │
 │   read_idx ───────────────────► avance après flush secteur  │
-│   (Inference Process lit, Training Process consomme)        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -711,9 +693,8 @@ POUR CHAQUE SECTEUR s (délimité par k actions) :
 | `actions` | structure mixte, shape `(N, 3)` | `steer` `float32` dans `[-1, 1]`, `gas` `int8` dans `{0, 1}`, `brake` `uint8` dans `{0, 1}` (cf. §1.6). |
 | `frame_idx` | `int64`, shape `(N,)` | Compteur incrémental par frame. Ne date pas la frame, sert à détecter un drop (frame perdue par lag) : si `frame_idx[i+1] - frame_idx[i] ≠ 1`, il y a un trou à traiter avant l'entraînement. |
 | `trajectory_score` | `float32` | (adaptation uniquement) Score de la trajectoire sélectionnée pour ce secteur (§2.3). Permet de filtrer a posteriori les secteurs. |
-| `states` | `float32`, shape `(N, S)` | (groupes /imitation et /records) Vecteur d'état condensé (embedding voiture) ou raw features. `S` = nombre de features. Compression gzip level 4. |
 
-**Chunks et compression** : chaque dataset est stocké par chunks de 256 ou 512 frames, avec compression gzip level 4. Cela permet une lecture/écriture incrémentale sans charger tout le fichier en mémoire.
+**Chunks et compression** : chaque dataset est stocké par chunks de 256 ou 512 frames, avec compression. Cela permet une lecture/écriture incrémentale sans charger tout le fichier en mémoire.
 
 **Accès concurrent** : **writer unique dédié rattaché à GIP**. GIP collecte et remet les lots à un writer HDF5 unique, qui centralise toutes les écritures et effectue les `flush`/rotations. INF et TRN peuvent être lecteurs multiples illimités, en ouvrant des vues de lecture cohérentes.
 
@@ -726,21 +707,18 @@ Le `.h5` se charge d'enregistrer les données utilisées pour l'entraînement de
 
 C'est pour cela qu'à chaque lancement, des données supplémentaires seront récoltées. Il s'agit du contenu des logs, des graphiques et des données pour produire les graphiques (voir §9). Ce seront les **archives**. Pour l'instant, au niveau des points, il ne sera gardé que les points de loss.
 
+
 #### 5.3.1 Arborescence
 
 ```
-Archives/
-├── logs/
-│   ├── run_1.jsonl
-│   ├── run_2.jsonl
-│   └── ...
-├── metrics/
-│   └── loss_history.parquet
-└── plots/
-    └── loss_curve_1.png
+├── archives/
+    ├── loss_history.parquet
+    └── Lancement_1/
+        ├── logs.jsonl
+        └── plots/
+            └── loss_curve_latest.png
 ```
 
-Trois natures de données, trois traitements distincts. Aucun de ces fichiers ne fait partie du système de versioning des modèles (pas de lien avec le dossier `versions/`) — ce sont des données d'observation, pas des poids.
 
 #### 5.3.2 Logs
 
@@ -835,11 +813,11 @@ versions/
 #### 5.4.2 Nommage des fichiers de composants
 
 ```
-{nom_composant}__{hash_contenu}.safetensors
+{nom_composant}__{nb_version}.safetensors
 ```
 
 - `nom_composant` : identifiant stable du sous-modèle (son nom, cf. §2.2).
-- `hash_contenu` : hash SHA-256 tronqué du contenu binaire du `state_dict` sérialisé. Deux composants strictement identiques en contenu produisent le même hash et donc le même fichier — c'est ce qui permet la déduplication entre Versions successives (en plus d'être moins coûteux à maintenir que des indices par sous-modèle).
+- `nb_version` : numero de la version du composant individuel.
 
 #### 5.4.3 Format d'un fichier de version (JSON)
 
@@ -849,21 +827,21 @@ versions/
   "parent_version": "v013",
   "created_at": "2026-08-26T14:32:10Z",
   "components": {
-    "car_encoder":             "car_encoder__9f8e7d6c.safetensors",
-    "map_encoder":             "map_encoder__11223344.safetensors",
-    "world_model_car":         "world_model_car__d4e5f6a7.safetensors",
-    "world_model_map":         "world_model_map__aabbccdd.safetensors",
-    "goal_model":              "goal_model__55667788.safetensors",
-    "action_model":            "action_model__99aabbcc.safetensors",
-    "best_trajectory":         "best_trajectory__99887766.safetensors",
-    "pred_env_advance":        "pred_env_advance__33445566.safetensors"
+    "car_encoder":             "car_encoder__5.safetensors",
+    "map_encoder":             "map_encoder__2.safetensors",
+    "world_model_car":         "world_model_car__4.safetensors",
+    "world_model_map":         "world_model_map__2.safetensors",
+    "goal_model":              "goal_model__5.safetensors",
+    "action_model":            "action_model__9.safetensors",
+    "best_trajectory":         "best_trajectory__9.safetensors",
+    "pred_env_advance":        "pred_env_advance__3.safetensors"
   }
 }
 ```
 
 #### 5.4.4 Contenu des fichiers `.safetensors`
 
-Chaque fichier `.safetensors` contient le `state_dict` complet d'**un seul** sous-modèle (pas un agrégat de tous les sous-modèles). Ce choix permet :
+Chaque fichier `.safetensors` contient les poids complet d'**un seul** sous-modèle (pas un agrégat de tous les sous-modèles). Ce choix permet :
 
 - la déduplication indépendante par composant (si seul `best_trajectory` change entre deux Versions, seul un nouveau fichier `best_trajectory__*.safetensors` est écrit — les autres composants ne sont pas réécrits) ;
 - le chargement sélectif côté inférence (recharger uniquement les composants dont le hash a changé par rapport à la Version actuellement en mémoire).
@@ -893,16 +871,18 @@ En d'autres termes, les datasets `.h5` seront totalement gardés et utilisés po
 
 Cette section spécifie l'architecture d'exécution de LTM-AI et les contrats d'échange entre ses processus. Les processus sont séparés — il ne s'agit pas de groupes de threads — afin d'isoler les crashs, de permettre le redémarrage indépendant d'un composant et de laisser l'entraînement exploiter les ressources disponibles sans bloquer la boucle de conduite.
 
-**Deux processus locaux autonomes seulement**:
+**Deux processus locaux autonomes seulement tounant réellement en permanence**:
 
 - **INF** (Inference Process)
 - **CC** (Control Center, incluant GIP et la GUI)
 
-**TRN** (Training) est lancé et contrôlé par CC comme un module d'entraînement séquentiel ; il ne s'exécute jamais en concurrence avec INF.
+**TRN** (Training) est lancé et contrôlé par CC comme un module d'entraînement séquentiel ; il ne s'exécute jamais en concurrence avec INF. Par contre il reste un processus à part entière.
+
+
 
 ### 6.1 Vue d'ensemble
 
-Les deux processus principaux s'exécutent sur une même machine. CC lance et contrôle également le module TRN dans sa fenêtre d'exécution séquentielle. ZeroMQ transporte les messages de contrôle, d'actions, de supervision et de monitoring. Les données volumineuses ou nécessitant un accès partagé utilisent le MMAP et HDF5 ; les modèles sont échangés par les fichiers de versions.
+Les deux processus principaux s'exécutent sur une même machine. ZeroMQ transporte les messages de contrôle, d'actions, de supervision et de monitoring. Les données volumineuses ou nécessitant un accès partagé utilisent le MMAP et HDF5 ; les modèles sont échangés par les fichiers de versions.
 
 ```
                                                          Trackmania 2020
@@ -914,8 +894,8 @@ Les deux processus principaux s'exécutent sur une même machine. CC lance et co
 │ INF — Inference                │        │ CC — Control Center            │
 │                                │        │                                │
 │ PUSH action ─────────────► CC  │        │                                │
-│ PUSH inf_stats ───────────► CC │◄──────►│                                │
-│ PUB heartbeat ─────────────► CC│        │ REQ/REP map_metadata ◄────► INF│
+│ PUSH inf_stats ──────────► CC  │◄──────►│                                │
+│ PUB heartbeat ───────────► CC  │        │ REQ/REP map_metadata ◄────► INF│
 └────────────────────────────────┘        │ PUSH version_signal ──────► INF│
                 ▲                         │ PUSH training_trigger ───► TRN │
                 │ version.txt (lecture)   └────────────────────────────────┘
@@ -938,7 +918,7 @@ Fichiers partagés (hors ZeroMQ) :
 ```
 
 
-**Règles de cadence.** Les sous-composants GIP et GUI, ainsi qu'INF et TRN, publient chacun à leur rythme naturel. Aucune cadence fixe n'est imposée aux messages de monitoring ou de statistiques pour satisfaire l'affichage. Le CC met à jour asynchronement le dictionnaire mémoire à chaque message reçu. La GUI se redessine sur un timer indépendant à 10 Hz et relit cet état à chaque tick ; la fréquence de rendu n'est donc pas la fréquence de publication. Un widget peut rester visuellement inchangé plusieurs ticks, notamment pour la loss d'entraînement.
+**Règles de cadence.** Les sous-composants GIP et GUI, ainsi qu'INF et TRN, publient chacun à leur rythme naturel. Aucune cadence fixe n'est imposée aux messages de monitoring ou de statistiques pour satisfaire l'affichage. Le CC met à jour asynchronement les dictionnaires mémoire à chaque message reçu. La GUI se redessine sur un timer indépendant à 10 Hz et relit cet état à chaque tick ; la fréquence de rendu n'est donc pas la fréquence de publication. Un widget peut rester visuellement inchangé plusieurs ticks, notamment pour la loss d'entraînement.
 
 Les timestamps de trames GIP sont utilisés en interne pour la synchronisation et la détection de drops ; ils ne sont pas écrits dans le HDF5 final. La continuité des `frame_idx` reste vérifiable dans le dataset.
 
@@ -955,7 +935,6 @@ Les timestamps de trames GIP sont utilisés en interne pour la synchronisation e
 | **GIP — HDF5 Writer** | `h5py` | Flushe périodiquement les données persistantes par secteur ou sur timer ; les timestamps internes n'entrent pas dans le HDF5 final. |
 | **GIP — Action Receiver/Sender** | ZeroMQ PULL + TCP/vgamepad | Reçoit les actions INF et les applique à Trackmania via le canal d'entrée configuré. |
 | IPC/Message Poller | ZeroMQ + polling non bloquant | Reçoit les messages des producteurs sans bloquer le rendu. |
-| `last_known_state` | dictionnaire mémoire | Stocke le dernier état connu par source/type de donnée, avec timestamp de réception et, si disponible, timestamp producteur. |
 | Mode Manager | Python | Implémente les transitions entre Repérage, Imitation, Drive, Adaptation et Record Replay. |
 | GUI | DearPyGUI | Affiche l'état courant ; le rendu est déclenché par un timer indépendant à 10 Hz. Sous-composante interne, **même processus** que CC. |
 | Stats Collector | Python | Normalise et conserve les événements de monitoring pour la session. |
@@ -1000,8 +979,7 @@ Pour les sous-composants ce sera à vérifier, il y a un peu plus de subtilités
 | HDF5 Reader / Data Loader | `h5py` + PyTorch DataLoader | Lit les batches et séquences validées. |
 | Training Loop | PyTorch | Forward, calcul de loss par sous-modèle, backward et optimisation. |
 | Gradient Monitor | PyTorch | Calcule la norme des gradients séparément pour chaque sous-modèle. |
-| version Writer | PyTorch + `os.replace` | Écrit `*.tmp`, flush/fsync si configuré, puis renomme atomiquement. |
-| Version Manager | bibliothèque standard | Incrémente et persiste `version.txt`. |
+| version Writer/Manager | PyTorch + `os.replace` | Écrit `*.tmp`, flush/fsync si configuré, puis renomme atomiquement. |
 
 **Entrées :** données HDF5 ; dernière version du modèle chargée ; `training_trigger` manuel ou événement d'entraînement orchestré par CC.
 
@@ -1030,9 +1008,7 @@ TRN est **local, séquentiel et exclusif**. Il ne s'exécute **jamais** pendant 
 | `action` | PUSH/PULL | Chaque décision exploitable, 10 Hz normalement | INF | GIP | `(steer, gas, brake)`, identifiants de frame. |
 | `telemetry` | PUB/SUB | À chaque trame validée, nominalement ~10 Hz | GIP (depuis le jeu) | abonnés | État lu depuis `VehicleState`, dont `speed`, `rpm`, `gear`, `pos`, `steer`, `gas`, `brake`. |
 | `mode` | PUB/SUB | Changement de mode ou paramètres | CC | INF, GIP | Mode actif et paramètres associés. |
-| `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | CC | Enveloppe de monitoring INF ; `stream` vaut notamment `monitor.action`, `monitor.embedding_state` ou `monitor.gate_progress`. |
-| `monitor.embedding_state` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant d'embedding environnement ; le total vient de `map_metadata`. |
-| `monitor.gate_progress` | flux logique via `inf_stats` | À chaque changement utile | INF | CC/GUI | Index courant de gate ; le total vient de `map_metadata`. |
+| `inf_stats` | PUSH/PULL | Rythme naturel d'INF | INF | CC | Enveloppe de monitoring INF et TRN|
 | `monitor.training_stats` | PUB/SUB | Steps/batches ou événements TRN | TRN | CC/GUI | Loss par sous-modèle, norme de gradient par sous-modèle, temps d'entraînement. |
 | `monitor.inference_perf` | flux logique via `inf_stats` (ou PUB dédié) | Mesure/période naturelle INF | INF | CC/GUI | Fréquence de décision mesurée en Hz et délai d'inférence en ms. |
 | `process_heartbeat` | PUB/SUB | Périodique, indépendant du métier | CC, INF, TRN | CC | Processus vivant, mort ou en erreur, numéro de séquence et dernier état connu. GIP est supervisé comme sous-composant de CC. |
@@ -1063,15 +1039,11 @@ Les ports ci-dessous sont des **propositions** dans une plage libre d'exemple (`
 | `map_metadata` | 5563 | REQ/REP | CC ↔ INF | Proposition à valider. |
 | `trajectory_selection` | 5565 | PUSH/PULL | CC → INF | Proposition à valider. |
 
-> **Flux de Version — règle explicite.** TRN n'envoie jamais directement à INF une notification de nouvelle Version. TRN publie `version_ready` vers CC ; le version Watcher de CC observe `version.txt`, reçoit cette annonce et décide de l'activation. CC envoie alors `version_signal` à INF avec la Version et le chemin à charger, comme si un opérateur avait choisi manuellement une Version. INF ne lit jamais `version.txt` périodiquement.
-
 **Explication de l'utilité de chaque canal** :
 
 - **`telemetry`** : diffusion par GIP de la trame validée issue directement de `VehicleState` vers INF. `steer`, `gas` et `brake` sont lus au même niveau que `speed`, `rpm`, `gear` et la position ; ils ne sont pas envoyés séparément par GIP. Ces valeurs représentent l'input tel qu'interprété par le moteur du jeu (vérité terrain), à distinguer de l'action brute envoyée par INF avant application par vgamepad. Il reste à vérifier si le jeu applique une courbe de réponse interne avant de les exposer.
-- **`action`** : pipeline point-à-point ayant un effet sur le jeu. GIP consomme l'action et l'applique ; il ne sert pas à alimenter plusieurs affichages.
+- **`action`** : liste d'action décidée par INF à faire appliquer par GIP.
 - **`mode`** : diffusion des transitions décidées par CC : Repérage, Imitation, Drive, Adaptation ou Record Replay, avec les paramètres propres au mode.
-- **`monitor.embedding_state`** : position courante dans la séquence d'embeddings environnement. Le total est une propriété statique de la map, obtenue une seule fois par `map_metadata`.
-- **`monitor.gate_progress`** : index courant de gate. Son total suit le même mécanisme statique `map_metadata`.
 - **`monitor.training_stats`** : TRN publie les pertes de chaque sous-modèle séparément, les normes de gradients correspondantes et le temps de training. Il n'y a pas de loss globale obligatoire et la cadence n'est pas 10 Hz.
 - **`monitor.inference_perf`** : métriques mesurées par INF, notamment `decision_hz` réel et `inference_latency_ms`.
 - **`process_heartbeat`** : supervision technique séparée des statistiques métier. CC peut déclarer un processus vivant, muet ou en erreur sans déduire cet état d'une loss ou d'une télémétrie.
@@ -1086,18 +1058,6 @@ La GUI ne traite pas directement un message entrant comme un événement de rend
 ### 6.8 Formats JSON des messages
 
 Les exemples ci-dessous donnent un contrat minimal. Les champs `schema_version`, `message_id` et `sent_at` sont recommandés sur les messages persistants ou diagnostiqués ; `timestamp` représente l'horloge producteur quand il est disponible. Les timestamps runtime ne doivent pas être interprétés comme des colonnes HDF5 finales.
-
-Tous les messages partagent l'enveloppe commune suivante :
-
-```json
-{
-  "schema_version": 1,
-  "type": "<voir ci-dessous>",
-  "timestamp": 1722086462.050
-}
-```
-
-Les corps spécifiques s'ajoutent à cette enveloppe. La convention d'action `(steer, gas, brake)` est exactement celle du §1.6 ; toute déviation est un contrat violé.
 
 #### `telemetry`
 
@@ -1151,36 +1111,6 @@ Trame envoyée par INF à GIP ; contient l'**action injectée** (cf. §1.6).
 }
 ```
 
-#### `monitor.embedding_state`
-
-```json
-{
-  "schema_version": 1,
-  "type": "inf_stats",
-  "stream": "monitor.embedding_state",
-  "timestamp": 1722086462.070,
-  "map_id": "map_001",
-  "encoder_version": 7,
-  "embedding_index": 12,
-  "total_embeddings": 48,
-  "changed": true
-}
-```
-
-#### `monitor.gate_progress`
-
-```json
-{
-  "schema_version": 1,
-  "type": "inf_stats",
-  "stream": "monitor.gate_progress",
-  "timestamp": 1722086462.071,
-  "map_id": "map_001",
-  "gate_index": 37,
-  "total_gates": 192,
-  "changed": true
-}
-```
 
 #### `monitor.training_stats`
 
@@ -1328,58 +1258,65 @@ Trame envoyée par INF à GIP ; contient l'**action injectée** (cf. §1.6).
 
 Les champs `total_environment_embeddings` et `total_gates` sont des métadonnées statiques de map. Ils sont mis en cache par CC/INF après la réponse ; ils ne doivent pas être ajoutés à chaque message `monitor.embedding_state` ou `monitor.gate_progress`.
 
-### 6.9 Boucle de décision à 10 Hz
-
-**A REFAIRE**
+### 6.9 Boucle de décision
 
 ```
                 ┌────────────────────────────────────────────────┐
-                │  t = 0 ms                                    │
+                │  t = 0 ms                                      │
                 │                                                │
                 │   ┌─────────────┐                              │
                 │   │ GIP écrit   │  (frame N dans MMAP)         │
                 │   │ frame_idx=N │                              │
                 │   └──────┬──────┘                              │
-                │          ▼                                    │
+                │          ▼                                     │
                 │   ┌─────────────┐                              │
-                │   │ INF détecte │  write_idx > read_idx       │
+                │   │ INF détecte │  write_idx > read_idx        │
                 │   │ frame dispo │                              │
                 │   └──────┬──────┘                              │
-                │          ▼                                    │
+                │          ▼                                     │
                 │   ┌─────────────┐                              │
-                │   │ lit MMAP    │  position, speed, gear,     │
-                │   │ + historique│  rpm, action observée       │
+                │   │ lit MMAP    │  position, speed, gear,      │
+                │   │ + historique│  rpm, action observée        │
                 │   └──────┬──────┘                              │
-                │          ▼                                    │
+                │          ▼                                     │
                 │   ┌─────────────┐                              │
-                │   │ calcule     │  car_emb = CarEncoder(...)   │
-                │   │ embeddings  │  env_emb = EMB[i]            │
+                │   │ sélection   │  actualisé si passage de la  │
+                │   │ emb env     │  dernière gate associé       │
                 │   └──────┬──────┘                              │
-                │          ▼                                    │
+                │          ▼                                     │
                 │   ┌─────────────┐                              │
-                │   │ forward     │  Goal + Action              │
-                │   │ pass        │  → action injectée          │
+                │   │ maj goal    │  goal_emb = GoalModel(...)   │
+                │   │ embedding   │  tous les k actions          │
                 │   └──────┬──────┘                              │
-                │          ▼                                    │
+                │          ▼                                     │
                 │   ┌─────────────┐                              │
-                │   │ publie      │  ZMQ PUSH `action`          │
-                │   │ action      │  + ZMQ `monitor.*`          │
+                │   │ forward     │  Goal + Action               │
+                │   │ pass        │  avec car_emb + env_emb      │
+                │   │             │  + goal_emb                  │
+                │   │             │  → action injectée           │
+                │   └──────┬──────┘                              │
+                │          ▼                                     │
+                │   ┌─────────────┐                              │
+                │   │ publie      │  ZMQ PUSH `action`           │
+                │   │ action      │  + ZMQ `monitor.*`           │
                 │   └─────────────┘                              │
-                │                                                │
-                │  t ≈ 100 ms                                    │
-                │   (cadence nominale 10 Hz)                     │
+                │         ▼                                      │ 
+                │   ┌─────────────┐                              │
+                │   │ enb car     │ Si moment de recalibrer:     │
+                │   │ (voiture)   │  car_emb_recab = CarEncoder()│
+                │   │             │ Sinon                        │
+                │   └──────┬──────┘   car_emb_recab = car_emb    │
+                │          ▼                                     │
+                │   ┌─────────────┐                              │
+                │   │ Car WM      │ <-- car_emb                  │
+                │   │             │                              │
+                │   └─────────────┘                              │
+                │          ▼                                     │
+                │     new embedding car                          │
                 └────────────────────────────────────────────────┘
 ```
 
-**Invariants** :
-
-- La cadence visée est 10 Hz ; la cadence réellement mesurée est publiée par `monitor.inference_perf.decision_hz`. Aucune valeur de configuration ne peut écraser cette mesure.
-- Aucun drop de `frame_idx` n'est toléré. Un trou déclenche un événement `telemetry.gap` et un drop d'entraînement (les frames manquantes ne sont pas synthétisées).
-- La latence cumulée de l'étape INF est bornée par les paliers de dégradation §4.4.
-
 ### 6.10 Machine à états du Cycle
-
-**AUSSI A REFAIRE**
 
 Le Cycle est la séquence programmable décrite au §9.5.2.a. Sa machine à états est pilotée par CC et publie ses transitions :
 
@@ -1439,8 +1376,6 @@ Transitions d'échec à tout moment :
   │      FINISHED      │
   └────────────────────┘
 ```
-
-L'état **`WAITING` doit rester non bloquant** : c'est une propriété observée, jamais une attente synchrone. Cette contrainte est rappelée au §6.1 et §6.2. Elle est la raison pour laquelle la GUI est interne à CC : un thread séparé pour la GUI n'aurait rien de mieux à faire pendant `WAITING` et complexifierait le partage de `last_known_state`.
 
 ---
 
@@ -1842,53 +1777,96 @@ CC orchestre transitions, chargements de Version et d'embeddings, chargements de
 
 ## 10. Paramètres de configuration YAML
 
-La configuration est répartie en quatre fichiers maximum, avec un fichier technique GUI optionnel fusionnable dans `runtime.yaml`.
+La configuration est répartie en plusieurs fichiers spécialisés, alignés sur la séparation fonctionnelle du système. La composition exacte de ces fichier se fera durant la phase de programmation, mais une première version des fichiers est prévus :
 
 ```yaml
 # runtime.yaml
-mode: drive
-drive_training_enabled: true
-trn:
-  local: true
-  sequential: true
-  run_only_between_runs: true
-  allow_while_inf_active: false
-trn_lock_name: LTM-AI_TRNLock
+schema_version: 1
+runtime:
+  mode: reconnaissance
+  decision_rate_hz: 10
+  decision_rate_target_hz: 10
+  drive_training_enabled: true
+  training_enabled: true
+  inference_enabled: true
+  local_training: true
+  sequential_training: true
+  trn_lock_name: LTM-AI_TRNLock
+```
+
+```yaml
+# environment.yaml
+schema_version: 1
+environment:
+  game:
+    name: Trackmania 2020
+    plugin: {name: Openplanet, scripting_language: AngelScript}
+  telemetry:
+    sample_rate_hz: 10
+  capture:
+    screenshot: {enabled: true, reject_when_menu_or_pause: true}
+  map:
+    source: TMX
+    load_timeout_s: 30
+    failure_state: map_load_failed
 ```
 
 ```yaml
 # action.yaml
 schema_version: 1
 action:
-  order: [steer, gas, brake]
-  steer: {type: continuous, dtype: float32, min: -1.0, max: 1.0}
-  gas: {type: discrete, dtype: int8, values: [-1, 0, 1]}
-  brake: {type: discrete, dtype: uint8, values: [0, 1]}
+  canonical_order: [steer, gas, brake]
+  schema:
+    steer: {type: continuous, dtype: float32, min: -1.0, max: 1.0}
+    gas: {type: discrete, dtype: int8, domain: [0, 1]}
+    brake: {type: discrete, dtype: uint8, domain: [0, 1]}
+```
+
+```yaml
+# models.yaml
+schema_version: 1
+models:
+  submodels:
+    car_encoder: {input: [telemetry_history, screenshots_history], output: car_embedding}
+    map_encoder: {input: [map_segment_screenshots], output: map_embedding}
+    goal_model: {input: [car_embedding, map_embedding, next_map_embedding], output: goal_embedding}
+    action_model: {input: [car_embedding, map_embedding, next_map_embedding, goal_embedding, steps_remaining], output: [steer, gas, brake]}
+    world_model_car: {input: [car_embedding, map_embedding, progress, planned_actions], output: predicted_next_car_embedding}
+    world_model_map: {input: [map_embedding, next_frame], output: predicted_next_map_embedding}
 ```
 
 ```yaml
 # adaptation.yaml
-sector_actions: null       # à confirmer expérimentalement
-cem_candidates: null       # à confirmer expérimentalement
-cem_retained: null         # à confirmer expérimentalement
-continuation_window_s: 7.0
-noise_target: null         # goal_embedding ou action : choix expérimental
-latency_degradation_ms: {palier_0: null, palier_1: null, palier_2: null, palier_3: null}
-rollback:
-  eval_every_sectors: null        # à confirmer expérimentalement
-  degradation_percent: null       # à confirmer expérimentalement
-  failure_delta_points: null      # à confirmer expérimentalement
+schema_version: 1
+adaptation:
+  continuation_window_s: 7.0
+  cem: {candidates: null, retained: null}
+  rollback: {eval_every_sectors: null, degradation_percent: null, failure_delta_points: null}
+  latency_degradation_ms: {palier_0: null, palier_1: null, palier_2: null, palier_3: null}
 ```
 
 ```yaml
 # storage.yaml
-hdf5: {path: data/datasets/ltm_sequences.h5, writer: GIP, swmr: false, flush_every: sector}
-mmap: {path: data/runtime/ltm_runtime.mmap, frame_capacity: null, screenshot_shape: null}
-versions: {path: data/versions, retention: all}
-archive: {path: archives}
+schema_version: 1
+storage:
+  mmap: {path: data/runtime/ltm_runtime.mmap, writer: GIP, reader: INF}
+  hdf5: {path: data/datasets/ltm_sequences.h5, writer: GIP, swmr: false, flush_every: sector}
+  versions: {path: data/versions, retention: all}
+  archive: {path: archives}
 ```
 
-Les valeurs ouvertes sont explicitement `null` dans les extraits YAML. Les valeurs `7.0`, `10 Hz` et la forme d'action ne sont pas des paramètres laissés ouverts : elles sont des contrats validés du projet.
+```yaml
+# gui.yaml
+schema_version: 1
+gui:
+  mode: dearpygui
+  top_bar_full_width: true
+  left_column_ratio: 0.4
+  right_column_ratio: 0.6
+  persistent_tabs: [Graphiques, Programmation cycle]
+```
+
+La structure documentaire correspond maintenant à la structure effective présente dans le dépôt : `runtime.yaml`, `environment.yaml`, `action.yaml`, `models.yaml`, `adaptation.yaml`, `storage.yaml` et `gui.yaml`. Les valeurs ouvertes sont explicitement `null` dans les extraits YAML. Les valeurs `7.0`, `10 Hz` et la forme canonique de l’action ne sont pas des paramètres laissés ouverts : elles sont des contrats validés du projet.
 
 ---
 
@@ -1897,13 +1875,10 @@ Les valeurs ouvertes sont explicitement `null` dans les extraits YAML. Les valeu
 Les points suivants constituent des tâches d'ingénierie, avec un résultat attendu et une méthode de validation :
 
 1. **GUI au-dessus du jeu** : tester le mode fenêtre/borderless, capture d'entrée et capture écran sans inclusion de la GUI ; un échec doit mener à une GUI sur écran séparé, sans modifier la boucle INF.
-2. **Rejouabilité fiable des trajectoires** : mesurer l'état initial, déclencher reset/restart, vérifier la synchronisation de `frame_idx`, et invalider toute comparaison si l'état initial n'est pas reproductible.
-3. **Plugin TMX et macro de chargement de map** : tester une mise à jour de Trackmania/plugin, le timeout `map_load_failed` et le plan de repli manuel.
-4. **TICK** : étudier le retour frame-par-frame pour restaurer l'état d'une voiture, calculer une meilleure trajectoire, simuler hors jeu et récupérer éventuellement la télémétrie de WR. Ce travail ne bloque pas la méthode V1 fondée sur des runs réels.
-5. **Fermeture propre** : vérifier que CC/GIP/TRN flushent logs, HDF5, métriques et état de Cycle, puis produisent un résumé de lancement consultable après fermeture.
-6. **Capture correcte des screenshots** : rejeter les frames avec menu, écran de pause ou overlay GUI ; vérifier la séquence de screenshots du repérage et la présence d'un état de capture valide dans chaque frame.
-7. **Synchronisation actions/télémétrie/capture** : comparer les timestamps plugin, GIP, capture écran et `frame_idx`, puis quantifier le décalage ; aucune hypothèse de synchronisation parfaite ne doit être codée avant ce test.
-8. **Surveillance TRN** : tester que `training_trigger` est refusé pendant un run INF actif, que `TRNLock` est exclusif, et que le trigger est repris dans la fenêtre `WAITING` ou entre deux runs.
+2. **Rejouabilité fiable des trajectoires en mode Adaptation** : Trouver un moyen de remettre la voiture dans l'exact même état au début de chaque sectuer pour chaque run d'exploration.(Utilisation de TICK avec un safestate???)
+3. **TICK Pour le mode Record Replay** : Possibilité éventuelle d'utiliser TICK pour faire rejouer les run de WR en jeu pour les utiliser comme Replay Pour l'imitation.
+4. **Plugin TMX et macro de chargement de map** : tester une mise à jour de Trackmania/plugin, le timeout `map_load_failed` et le plan de repli manuel.
+5. **Capture correcte des screenshots** : rejeter les frames avec menu, écran de pause ou overlay GUI ; vérifier la séquence de screenshots du repérage et la présence d'un état de capture valide dans chaque frame. Faire en sorte que les captures d'écran ne soient pas prises quand on est sur un menu ou quand le run est terminé.
 
 ---
 
@@ -1914,11 +1889,10 @@ Les points suivants constituent des tâches d'ingénierie, avec un résultat att
 | **Action injectée** | Tuple canonique `(steer, gas, brake)` produit par INF, envoyé par IPC et appliqué au jeu par GIP. |
 | **Action observée** | Valeurs `steer`, `gas`, `brake` lues dans `VehicleState`, représentant l'effet constaté par le jeu. |
 | **Car Embedding** | Vecteur latent de dynamique récente de la voiture, vision incluse. |
+| **Embedding environnement** | Vecteur latent pré-calculé à partir du repérage manuel pour une portion de map. |
 | **CC** | **Cycle Controller**, processus orchestrateur qui contient également la GUI comme sous-composante interne. |
 | **Checkpoint** | Checkpoint réel de Trackmania uniquement. Le mot ne désigne jamais une Version de modèle. |
 | **CEM** | Cross-Entropy Method, méthode de génération/évaluation de trajectoires candidates. |
-| **Embedding environnement** | Vecteur latent pré-calculé à partir du repérage manuel pour une portion de map. |
-| **encoder_version** | Identifiant technique de compatibilité d'embedding, distinct de la Version de modèle. |
 | **Gate** | Point de progression d'une map utilisé pour le scoring de l'agent et l'indexation de l'environnement. |
 | **GIP** | **Game Interface Process**, capture écran/télémétrie, stockage temps réel et injection d'actions. |
 | **INF** | **Inférence**, processus qui calcule les embeddings et les actions à 10 Hz. |
@@ -1929,77 +1903,3 @@ Les points suivants constituent des tâches d'ingénierie, avec un résultat att
 | **World Model** | Sous-modèle qui prédit l'évolution d'un embedding voiture ou environnement. |
 
 ---
-
-## Annexe A — Protocole expérimental DirectML
-
-> **Protocole expérimental à exécuter, résultat inconnu à ce jour.** Cette annexe ne prétend pas résoudre le support matériel ; elle définit le test qui décidera de la voie d'exécution.
-
-### A.1 Constat
-
-- PyTorch ne peut pas utiliser la RX 6600 XT nativement sous Windows via le chemin CUDA habituel.
-- ROCm ne supporte pas `gfx1032` sous Windows dans la configuration cible.
-- La piste à évaluer est `torch-directml` et son backend DirectML.
-
-### A.2 Protocole en six points
-
-1. **Installer `torch-directml`** dans un environnement Python isolé correspondant à la version PyTorch retenue.
-2. Implémenter un micro-benchmark du **forward pass d'un encodeur visuel léger**, par exemple MobileNetV3, sur une frame `320x180`. Comparer CPU pur et DirectML sur la même machine et les mêmes données.
-3. Exécuter **au moins 100 itérations** par condition ; exclure les itérations de warm-up ; calculer une moyenne stable, ainsi que dispersion et percentiles pour constater une éventuelle variabilité.
-4. Le critère de décision est un **gain significatif à quantifier expérimentalement**, sans seuil imposé a priori. Si le gain est établi, migrer l'inférence de l'encodeur visuel et potentiellement le CEM vers DirectML ; sinon rester en CPU pur.
-5. Documenter que le support **autograd sous DirectML est partiel et potentiellement instable** ; un forward rapide ne suffit pas à justifier une migration de TRN.
-6. Vérifier que la **backpropagation fonctionne aussi**, afin d'éviter un split CPU/DirectML dont le coût de transfert mémoire annulerait le bénéfice. C'est le vrai point de bascule du protocole : si le forward est accéléré mais que la backpropagation ou les transferts rendent TRN impraticable, la décision doit rester CPU pur pour le chemin d'entraînement.
-
-Les résultats (versions de Python/PyTorch/DirectML, hashes du benchmark, températures, temps CPU/DirectML, résultats forward/backward et décision) sont archivés dans `archives/directml/` et ne modifient pas les contrats de la boucle INF tant que le protocole n'est pas conclu.
-
----
-
-## Annexe B — Entraînement distant (piste future)
-
-L'entraînement distant est une piste **future et non prioritaire en V1**. Les datasets collectés localement peuvent être envoyés vers une machine plus puissante pour un entraînement plus long, produisant un meilleur modèle initial qui sera chargé au lancement suivant. L'export doit préserver `map_id`, mode d'origine, `frame_idx`, l'action canonique `(steer, gas, brake)`, et `encoder_version` afin de rendre le dataset traçable.
-
-Cette piste **ne peut pas résoudre l'adaptation temps réel à une nouvelle map** : un serveur distant introduirait une latence réseau, ne contrôle pas l'état instantané du jeu et ne remplace pas l'exploration locale du mode Adaptation. Elle ne remplace donc jamais TRN local et séquentiel pour la réaction en ligne. La hiérarchie est : adaptation rapide locale pendant les runs, puis consolidation locale entre les runs ; entraînement distant éventuel pour améliorer le modèle initial du lancement suivant.
-
-À implémenter en V1 si possible, sans priorité : un export reproductible, un upload optionnel, une validation de Version distante (hash, `encoder_version`, schéma), puis une importation sous forme de Version candidate que CC ne peut activer qu'entre deux runs après vérifications. Aucun secret ou identifiant de serveur ne doit être stocké dans le dataset.
-
----
-
-## Annexe C — Récapitulatif des paramètres laissés ouverts
-
-Le tableau liste **tous les paramètres explicitement laissés ouverts** dans la spécification. Les valeurs numériques héritées ou indicatives sont neutralisées à `null` dans les exemples YAML lorsqu'elles sont des paramètres de configuration ; elles ne doivent pas être choisies arbitrairement.
-
-| # | Paramètre ouvert | Rôle | Fourchette indicative si connue dans le source | Méthode expérimentale suggérée |
-|---:|---|---|---|---|
-| 1 | Capacité du buffer MMAP | Nombre de frames conservées pour l'historique et la reprise | Non fournie | Mesurer le débit, la mémoire et la longueur d'historique nécessaire sans overflow. |
-| 2 | Taille de buffer de replay | Accumulation temporaire avant validation d'un run | Non fournie | Mesurer la taille des runs et tester la reprise après crash. |
-| 3 | `sector_actions` (`k`) | Nombre d'actions par secteur d'Adaptation | Non fournie | Comparer coût d'exploration et qualité de la sélection sur plusieurs maps. |
-| 4 | `cem_candidates` (`N`) | Nombre de trajectoires CEM générées | `50` figure dans le source comme exemple, pas comme valeur validée | Mesurer progression par coût CPU/GPU et par run. |
-| 5 | `cem_retained` (`M`) | Nombre de candidats conservés après pré-sélection | `2 ou 3` figure comme exemple | Évaluer le rappel du meilleur candidat contre le nombre de runs réels. |
-| 6 | Bruit CEM | Choisir bruit sur embedding goal ou actions | Deux options dans le source | A/B test sur mêmes secteurs, seeds contrôlés. |
-| 7 | Seuils de fiabilité des prédicteurs | Autoriser ou non la pré-sélection sans jeu | Non fournie | Validation croisée, calibration du ranking et comparaison au score réel 7 s. |
-| 8 | Formulation SIGREG/LeWM | Éviter le collapse latent | Variantes contrastive/VICReg citées | Comparer stabilité latente, loss et score de progression. |
-| 9 | Loss prédicteur d'avancement | Entraîner le scalaire d'avancement | MSE/cosine non figé | Comparer erreur d'avancement et utilité de la présélection. |
-| 10 | Distance du Modèle Goal | Évaluer un embedding goal | MSE/cosine/autre | Comparer convergence et qualité des trajectoires. |
-| 11 | Paramétrisation action CEM | Gérer sortie steer continue + gas/brake discrets | Logits relâchés ou têtes hybrides | Benchmark A/B du CEM hybride et taux d'actions valides. |
-| 12 | Loss Best Trajectory | Apprendre le ranking de candidats | Ranking/preference non figé | Comparer pairwise ranking, régression et corrélation avec score réel. |
-| 13 | Proportion imitation/adaptation | Mélange des sources dans un batch | Non fournie | Balayer les proportions sur validation par map. |
-| 14 | Budget de latence INF | Déclencher la dégradation | Non fourni | Mesurer la stabilité 10 Hz sous charge sur le poste cible. |
-| 15 | Seuils des paliers de latence | Choisir les limites `L_0..L_3` | Non fournie | Injecter des charges contrôlées et mesurer qualité/sécurité. |
-| 16 | Fenêtre de rollback | Nombre de runs/secteurs pour comparer | `eval_every_sectors: 2` dans le source, neutralisé | Mesurer variance inter-runs et faux positifs de rollback. |
-| 17 | Seuil de dégradation de progression | Déclencher rollback | `5 %` dans le source, à confirmer expérimentalement | Calibrer sur distribution de référence multi-runs. |
-| 18 | Seuil d'augmentation du taux d'échec | Déclencher rollback | `10 points` dans le source, à confirmer expérimentalement | Même protocole sur runs avec respawn/sortie de route. |
-| 19 | Fréquence de sauvegarde des Versions | Éviter trop de snapshots ou perte d'apprentissage | Non fournie | Mesurer coût I/O, espace et récupération après crash. |
-| 20 | Taille maximale des logs | Rotation/archivage des JSONL | Non fournie | Tester une session longue et définir une rotation sans perte. |
-| 21 | Taille de `loss_history.parquet` en mémoire | Déclencher flush avant fermeture | Non fournie | Mesurer RAM et temps de réécriture sur session longue. |
-| 22 | Fréquence d'écriture PNG | Limiter les I/O graphiques | `60–90 s` ou `500 points` comme exemples | Mesurer lisibilité du graphe et impact disque. |
-| 23 | Learning rates | Vitesse d'optimisation de chaque sous-modèle | Non fournie | Recherche d'hyperparamètres sur split map de validation. |
-| 24 | Batch sizes | Charge mémoire et variance de gradient | Non fournie | Mesurer utilisation RAM/latence et stabilité de convergence. |
-| 25 | Nombre d'époques TRN | Durée d'une fenêtre d'entraînement | Non fournie | Arrêt sur validation et budget d'une pause entre runs. |
-| 26 | Retry de chargement de map | Robustesse du Cycle aux dépendances tierces | Non fourni | Tests de panne du plugin, timeout et skip/pause. |
-| 27 | Timeout de chargement de map | Détecter `map_load_failed` | Non fourni | Mesurer les temps de chargement sur maps et cold starts. |
-| 28 | Dimension `D_car` | Taille du Car Embedding | Non fournie | Ablation dimensionnelle et mesure qualité/coût. |
-| 29 | Dimension `D_map` | Taille du Map Embedding | Non fournie | Ablation dimensionnelle et mesure qualité/coût. |
-| 30 | Dimension `D_goal` | Taille de l'embedding goal | Non fournie | Ablation dimensionnelle sur entraînement Goal et progression. |
-| 31 | Longueur historique `N` | Nombre de frames du Car Encoder | Non fournie | Tester mémoire, latence et bénéfice dynamique. |
-| 32 | Nombre de screenshots `M` par segment | Entrée Map Encoder | Non fournie | Comparer couverture visuelle, coût et stabilité des embeddings. |
-
-**Règle de clôture** : une valeur ouverte ne peut être promue dans un YAML opérationnel qu'après un protocole, une mesure archivée et une décision explicite. Les paramètres non listés dans cette annexe sont fixés par les contrats de la présente spécification ou doivent être traités comme une erreur de spécification lors de l'implémentation.

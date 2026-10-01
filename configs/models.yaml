@@ -1,0 +1,71 @@
+# LTM-AI model and submodel configuration
+# Sub-models described in the architecture specification.
+schema_version: 1
+models:
+  embedding:
+    car_embedding:
+      input:
+        telemetry_history: "N last frames"
+        screenshots_history: "N last frames"
+      output:
+        vector_dim: null
+        semantics: "recent car dynamics and control state"
+      architecture: "CNN + MLP fusion"
+    map_embedding:
+      input:
+        map_screenshots_segment: "screenshots between mini-checkpoints"
+      output:
+        vector_dim: null
+        semantics: "environment context for a map segment"
+      architecture: "CNN with possible spatial attention"
+
+  submodels:
+    car_encoder:
+      input: [telemetry_history, screenshots_history]
+      output: "car_embedding"
+      architecture: "CNN + MLP fusion"
+    map_encoder:
+      input: [map_segment_screenshots]
+      output: "map_embedding"
+      architecture: "CNN or transformer"
+    goal_model:
+      input: [current_map_embedding, current_car_embedding, next_map_embedding]
+      output: "goal_embedding"
+      architecture: "MLP or transformer"
+    action_model:
+      input: [car_embedding, map_embedding, next_map_embedding, goal_embedding, steps_remaining]
+      output: [steer, gas, brake]
+      architecture: "MLP or transformer"
+    world_model_car:
+      input: [current_car_embedding, map_embedding, progress_in_embedding, planned_actions]
+      output: "predicted_next_car_embedding"
+      architecture: "MLP or transformer"
+    world_model_map:
+      input: [current_map_embedding, next_frame]
+      output: "predicted_next_map_embedding"
+      architecture: "MLP or transformer"
+    embedding_progress_predictor:
+      input: [current_car_embedding, current_map_embedding, next_map_embedding]
+      output: "progress_ratio_between_0_and_1"
+      architecture: "MLP or transformer"
+    best_trajectory_predictor:
+      input: [adaptation_car_embeddings, current_map_embedding, future_map_embedding]
+      output: "best_embedding_index"
+      architecture: "MLP or transformer"
+
+  versioning:
+    compatibility:
+      map_embeddings: "must be recomputed when model architecture or weights change"
+      version_signal: "version_loaded"
+      model_format: "safetensors"
+      checkpoint_format: "pt"
+
+  interfaces:
+    monitoring:
+      required_flows:
+        - monitor.action
+        - monitor.embedding_state
+        - monitor.gate_progress
+        - monitor.inference_perf
+        - monitor.training_stats
+

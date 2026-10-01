@@ -1,0 +1,30 @@
+# LTM-AI GUI configuration
+# Optional presentation and UI layout settings.
+schema_version: 1
+gui:
+  mode: "dearpygui"
+  screen:
+    top_bar_full_width: true
+    left_column_ratio: 0.4
+    right_column_ratio: 0.6
+    persistent_tabs: ["Graphiques", "Programmation cycle"]
+  layout:
+    show_top_bar: true
+    show_left_column: true
+    show_right_column: true
+    keep_selection_and_period: true
+  shortcuts:
+    reconnaissance: "F1"
+    record_replay: "F2"
+    imitation: "F3"
+    adaptation: "F4"
+    inference: "F5"
+    validate_recon_run: "validate_run"
+  themes:
+    default: "light"
+    charts: "ImPlot"
+  telemetry_visibility:
+    raw_drive_telemetry: false
+  layout_constraints:
+    gui_above_game: true
+    fallback_separate_window: true

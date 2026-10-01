@@ -1,0 +1,29 @@
+# LTM-AI action-space configuration
+# Canonical action shape, stored and transported in the same format everywhere.
+schema_version: 1
+action:
+  canonical_order: [steer, gas, brake]
+  schema:
+    steer:
+      type: "continuous"
+      dtype: "float32"
+      domain: [-1.0, 1.0]
+      semantics: "left negative, right positive"
+    gas:
+      type: "discrete"
+      dtype: "int8"
+      domain: [0, 1]
+      semantics: "0 = neutral, 1 = throttle"
+    brake:
+      type: "discrete"
+      dtype: "uint8"
+      domain: [0, 1]
+      semantics: "0 = no brake, 1 = brake"
+  action_tuple:
+    - steer
+    - gas
+    - brake
+  validation:
+    enforce_canonical_schema: true
+    reject_action_shape_mismatch: true
+    enforce_domain_bounds: true

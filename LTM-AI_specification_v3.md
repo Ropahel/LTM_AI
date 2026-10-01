@@ -1629,8 +1629,6 @@ hdf5: {writer: GIP, swmr: false, flush_every: sector}
 
 - Posssibilité d'utiliser TICK pour faire jouer les WR et récupérer leur télémétries et trajectoire?
 
-- Quand le programme est fermée(proprement), enregistrer les données du lancement dans des doc pour pouvoir les revoir après.(genre quel modèle a fait le meilleure temps sur chaque map, les graphes, les logs etc...)
-
 - Comment faire en sorte de récolter les données au bon moment, c'est à dire de ne pas avoir des screenshots avec le menu de pb dans trackmania, ou avec la GUI. Comment faire en sorte de prendre la bonne séquence de screenshot pour le repérage?
 
 - Comment assurer la syncronisation temporel des actions, télémétries, dxcam?(on fera des test et après on verra)

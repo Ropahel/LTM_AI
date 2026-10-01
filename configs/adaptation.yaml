@@ -1,0 +1,33 @@
+# LTM-AI adaptation configuration
+# Defines adaptation, CEM and rollback policies.
+schema_version: 1
+adaptation:
+  mode: "sector_adaptation"
+  continuation_window_s: 7.0
+  sector_policy:
+    enabled: true
+    sector_actions: null
+    gate_count: null
+    compute_gate_progress: true
+  cem:
+    candidates: null
+    retained: null
+    optimizer: "CEM"
+    selection_strategy: "best_trajectory_from_candidates"
+  rollback:
+    enabled: true
+    eval_every_sectors: null
+    degradation_percent: null
+    failure_delta_points: null
+    trigger_on_regression: true
+    stable_version_restore: true
+  degradation:
+    latency_palier_ms:
+      palier_0: null
+      palier_1: null
+      palier_2: null
+      palier_3: null
+  noise:
+    target: null
+    semantics: "goal_embedding or action; experimental"
+

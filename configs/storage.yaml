@@ -1,0 +1,44 @@
+# LTM-AI storage and persistence configuration
+# Provides MMAP, HDF5, checkpoints and archive paths.
+schema_version: 1
+storage:
+  mmap:
+    path: "data/runtime/ltm_runtime.mmap"
+    meta_path: "data/runtime/ltm_runtime.mmap.meta"
+    frame_capacity: null
+    screenshot_shape: null
+    writer: "GIP"
+    reader: "INF"
+  hdf5:
+    path: "data/datasets/ltm_sequences.h5"
+    writer: "GIP"
+    swmr: false
+    flush_every: "sector"
+    layout: "hierarchical_hdf5"
+    data_sources:
+      reconnaissance: "screenshots + 3d positions"
+      replay: "telemetry + screenshots + actions"
+      training: "validated batches and sequences"
+  versions:
+    path: "data/versions"
+    retention: "all"
+    component_format: "safetensors"
+    checkpoint_format: "pt"
+  archive:
+    path: "archives"
+    logs:
+      path: "archives/logs"
+      format: "jsonl"
+    metrics:
+      path: "archives/metrics"
+      format: "parquet"
+    plots:
+      path: "archives/plots"
+      format: "png"
+  datasets:
+    folder: "data/datasets"
+    split:
+      reconnaissance: "data/datasets/reconnaissance"
+      replay: "data/datasets/replays"
+      training: "data/datasets/training"
+
