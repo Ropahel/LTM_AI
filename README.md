@@ -6,9 +6,11 @@
 
 ---
 
-## The idea in one sentence
+## The idea
 
 Drop an AI into a Trackmania 2020 track it has never seen, walk away, and come back to find it driving better than when you left.
+
+To this day, no Trackmania AI has been able to beat human players on several traks without complete retraining. LTM-AI is an attempt to change that, by giving the agent a way to *adapt* to a new track on its own, in a reasonable amount of time, on consumer hardware.
 
 ## Why this project exists
 
@@ -29,15 +31,15 @@ Keeping these apart is deliberate. The car behaves the same way whatever the tra
 
 On top of these two pictures sits a *world model*: a learned simulator that, given the current situation and an action, predicts what the next instant will look like — without touching the game. This is the piece that lets the agent *imagine* before it *acts*.
 
-## A run, as a story
+## A run
 
-**1. Driving.** The agent now drives the track using what it already knows about driving in general. On a track it has never seen, this is cautious and clumsy. Each attempt is recorded.
+**1. Driving.** The agent drives the track using what it already knows about driving in general. On a track it has never seen, this is cautious and clumsy.
 
 **2. Adapting.** Here is the heart of the project. Sector by sector, the agent asks: *where exactly should I be aiming, and how should I get there?* It generates several candidate intentions, evaluates them — ideally in its own imagination, by running its world model forward — and keeps the ones that get through the sector faster. Then it moves to the next sector. After a full pass, the whole run is a little better. Then it starts again.
 
-**4. Learning in the background.** While all this happens, every recorded attempt feeds back into the models. The agent's understanding of how cars move, and of what this track looks like, keeps getting sharper. New versions of the models are rolled out with safeguards so a bad update cannot wreck a good run.
+**3. Learning in the background.** While all this happens, every recorded attempt feeds back into the models. The agent's understanding of how cars move, and of what this track looks like, keeps getting sharper. New versions of the models are rolled out with safeguards so a bad update cannot wreck a good run.
 
-**5. A human, optionally.** A supervision interface shows what the agent is doing, lets a human take the wheel to demonstrate a section, or pause and inspect. The ambition is that this becomes less and less necessary over time.
+**4. A human, optionally.** A supervision interface shows what the agent is doing, lets a human take the wheel to demonstrate a section, or pause and inspect. The ambition is that this becomes less and less necessary over time.
 
 ## What is already decided
 
